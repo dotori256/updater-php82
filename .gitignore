@@ -1,0 +1,18 @@
+# 서버 운영 데이터 (저장소에 올리지 않음)
+server/data/*
+!server/data/.htaccess
+!server/data/index.html
+server/files/*
+!server/files/.htaccess
+!server/files/index.html
+server/manifests/*
+!server/manifests/.htaccess
+!server/manifests/index.html
+
+# 런처 작업 폴더
+.update/
+
+# Delphi 빌드 산출물
+*.dcu
+*.~*
+__history/

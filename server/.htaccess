@@ -1,0 +1,19 @@
+# 업로드 한도 (Apache mod_php 방식 호스팅에서 적용)
+<IfModule mod_php.c>
+  php_value upload_max_filesize 512M
+  php_value post_max_size 520M
+  php_value max_execution_time 300
+  php_value max_input_time 300
+</IfModule>
+<IfModule mod_php7.c>
+  php_value upload_max_filesize 512M
+  php_value post_max_size 520M
+  php_value max_execution_time 300
+</IfModule>
+Options -Indexes
+<FilesMatch "^\.user\.ini$">
+  Require all denied
+</FilesMatch>
+<FilesMatch "^(lib|config|launcher_api|otp)\.php$">
+  Require all denied
+</FilesMatch>

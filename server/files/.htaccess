@@ -1,0 +1,11 @@
+# 업로드된 파일은 다운로드만 가능하고 서버에서 실행되지 않도록 합니다.
+Options -Indexes -ExecCGI
+<IfModule mod_php.c>
+  php_flag engine off
+</IfModule>
+<IfModule mod_php7.c>
+  php_flag engine off
+</IfModule>
+RemoveHandler .php .phtml .php3 .php4 .php5 .phar
+RemoveType .php .phtml .php3 .php4 .php5 .phar
+ForceType application/octet-stream
