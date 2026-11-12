@@ -113,6 +113,9 @@ function script_common() { ?>
 <script>
 const CSRF = <?= json_encode(csrf_token()) ?>;
 const STEPUP = <?= json_encode(stepup_kind()) ?>;
+const SIGNING = <?= signing_enabled() ? 'true' : 'false' ?>;
+const SIGN_FP = <?= json_encode(($k = sign_key()) ? $k['fingerprint'] : '') ?>;
+const SIGN_INI = <?= json_encode(sign_ini_value()) ?>;
 <?php include __DIR__ . '/common.js.php'; ?>
 </script>
 <?php }

@@ -68,10 +68,10 @@ document.getElementById('settingsForm').onsubmit = async e => {
     await api(f);
     location.reload();
   } catch (err) {
-    if (!err.stepup) { alert(err.message); return; }
+    if (!err.stepup && !err.needSign) { alert(err.message); return; }
     // 실행 파일/인자를 바꾸면 PC 에서 다른 프로그램이 실행되므로 재인증
     try {
-      const r = await secureApi(f, {title: '실행 설정 변경 확인', okText: '저장',
+      const r = await secureApi(f, {title: '실행 설정 변경 확인', okText: '저장', publish: true,
         html: '<p>각 PC에서 실행되는 프로그램이 바뀝니다.</p><p class="mono">' + esc((setLaunch.value + ' ' + setArgs.value).trim() || '(없음)') + '</p>'});
       if (r !== null) location.reload();
     } catch (e2) { alert(e2.message); }

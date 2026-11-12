@@ -55,15 +55,109 @@ if (!$otp && empty($_SESSION['otp_pending'])) $_SESSION['otp_pending'] = otp_new
 <?php endif; ?>
 
 <?php
+$sk = sign_key();
+$unsigned = [];
+if ($sk) foreach (list_apps() as $a) if ($a['files'] && !sign_state_ok($a)) $unsigned[] = $a;
+?>
+<div class="card" id="signing">
+  <h2>배포 전자서명 <?php if ($sk): ?><span class="tag success">사용 중</span><?php else: ?><span class="tag gray">사용 안 함</span><?php endif; ?></h2>
+  <p>서명 키를 등록하면 배포·롤백할 때 OTP 대신 <b>키 파일 + 키 암호</b>로 서명해야 반영됩니다. 각 PC 의 런처는 서명이 맞지 않는 업데이트를 설치하지 않으므로,
+    <b>NAS 가 해킹되거나 비밀번호·OTP 가 유출돼도</b> 키 파일 없이는 악성 파일을 배포할 수 없습니다. 인증서 구매는 필요 없습니다.</p>
+  <?php if (!sign_available()): ?><p class="err">이 서버의 PHP 에 openssl 확장이 꺼져 있어 쓸 수 없습니다. (Web Station › PHP 프로필 › 확장에서 openssl 체크)</p><?php endif; ?>
+  <p class="err small-text hidden" id="httpsWarn">⚠ 지금 http 로 접속 중입니다. 브라우저 보안 정책상 전자서명(키 만들기/서명)은 <b>https</b> 접속에서만 됩니다. (시놀로지: 제어판 › 보안 › 인증서에서 Let's Encrypt 발급)</p>
+
+  <?php if ($sk): ?>
+    <p>등록된 키: <b class="mono" style="font-size:14px"><?= h($sk['fingerprint']) ?></b> <span class="muted small-text">RSA <?= intval($sk['bits']) ?> · <?= h($sk['created']) ?> 등록</span></p>
+    <h3 style="font-size:14px">PC 에 적용하기</h3>
+    <ol class="small-text">
+      <li>각 솔루션의 <b>설정 / 설치</b> 탭에서 updater.ini 를 새로 받으면 아래 <code>SignKey=</code> 줄이 들어 있습니다.</li>
+      <li>그 updater.ini 를 <b>배포</b> 탭에서 bin 바로 아래에 올려 배포합니다. (함께 새 Updater.exe 도 배포)</li>
+      <li>PC 가 한 번 업데이트를 받으면 그다음부터는 서명된 배포만 설치합니다.</li>
+    </ol>
+    <pre style="white-space:pre-wrap;word-break:break-all">SignKey=<?= h(sign_ini_value()) ?></pre>
+    <?php if ($unsigned): ?>
+      <p class="warn">⚠ 현재 버전에 서명이 없는 솔루션: <?php foreach ($unsigned as $a): ?><a href="?app=<?= urlencode($a['id']) ?>"><?= h($a['name']) ?></a> <?php endforeach; ?> — 솔루션 배포 탭의 [지금 서명]을 누르세요.</p>
+    <?php endif; ?>
+    <div class="row">
+      <button type="button" class="secondary" onclick="showCreate()">새 키로 교체</button>
+      <button type="button" class="secondary" onclick="pickExisting.click()">다른 키 파일로 교체</button>
+      <button type="button" class="danger" onclick="removeKey()">전자서명 해제</button>
+    </div>
+    <p class="muted small-text">키 교체 순서: ① [새 키로 교체]로 새 키 파일을 만들면 <code>SignKey=옛키,새키</code> 줄이 나옵니다 → ② 그 줄을 넣은 updater.ini 를 <b>지금 키로</b> 서명해 배포 → ③ PC 들이 받은 뒤 [다른 키 파일로 교체]로 새 키 파일을 등록.</p>
+  <?php else: ?>
+    <div class="row">
+      <button type="button" onclick="showCreate()" <?= sign_available() ? '' : 'disabled' ?>>서명 키 만들기</button>
+      <button type="button" class="secondary" onclick="pickExisting.click()" <?= sign_available() ? '' : 'disabled' ?>>가지고 있는 키 파일로 등록</button>
+    </div>
+  <?php endif; ?>
+  <input type="file" id="pickExisting" accept=".json,application/json" hidden>
+
+  <div id="createBox" class="hidden" style="margin-top:14px;border-top:1px solid var(--line);padding-top:14px">
+    <p><b>키 암호</b>를 정하세요. 키 파일을 누가 가져가도 이 암호 없이는 서명할 수 없습니다. (8자 이상)</p>
+    <div class="row">
+      <input type="password" id="kp1" placeholder="키 암호" autocomplete="new-password">
+      <input type="password" id="kp2" placeholder="키 암호 확인" autocomplete="new-password">
+      <button type="button" onclick="createKey()">만들고 키 파일 받기</button>
+    </div>
+    <p class="muted small-text">키 파일(.json)이 내려받아집니다. <b>USB 와 다른 PC 등 두 곳 이상에 백업</b>하세요. 잃어버리면 각 PC 의 SignKey 를 직접 바꿔야 합니다. 키 파일은 NAS 에 두지 마세요.</p>
+    <p id="createMsg" class="small-text"></p>
+  </div>
+</div>
+
+<?php script_common(); ?>
+<script>
+if (location.protocol !== 'https:' && !/^(localhost|127\.)/.test(location.hostname)) document.getElementById('httpsWarn').classList.remove('hidden');
+function showCreate() { document.getElementById('createBox').classList.remove('hidden'); kp1.focus(); }
+async function registerKey(spki, fp, note) {
+  const r = await secureApi({action:'sign_key_set', spki}, {title: '서명 키 등록', okText: '등록',
+    html: '<p>이 공개 키를 서버에 등록합니다.</p><p class="mono" style="font-size:14px">' + esc(fp) + '</p>' + (note || '')});
+  if (r !== null) location.reload();
+  return r;
+}
+async function createKey() {
+  const msg = document.getElementById('createMsg');
+  if (kp1.value.length < 8) { msg.className = 'small-text err'; msg.textContent = '키 암호는 8자 이상으로 하세요.'; return; }
+  if (kp1.value !== kp2.value) { msg.className = 'small-text err'; msg.textContent = '키 암호가 서로 다릅니다.'; return; }
+  try {
+    msg.className = 'small-text'; msg.textContent = '키 만드는 중...';
+    const k = await signKeyCreate(kp1.value);
+    downloadJson('sign-key-' + k.fingerprint.replace(/:/g, '').slice(0, 8) + '.json', k.file);
+    kp1.value = kp2.value = '';
+    if (SIGNING) {   // 교체: 바로 등록하지 않고, PC 에 옛 키 + 새 키를 먼저 배포하도록 안내
+      msg.className = 'small-text ok';
+      msg.innerHTML = '새 키 파일을 받았습니다 (' + esc(k.fingerprint) + '). 아직 서버에는 등록하지 않았습니다.<br>아래 줄을 넣은 updater.ini 를 지금 키로 배포하고, PC 들이 받은 뒤 [다른 키 파일로 교체]로 새 키 파일을 등록하세요.' +
+        '<pre style="white-space:pre-wrap;word-break:break-all">SignKey=' + esc(SIGN_INI + ',' + k.ini) + '</pre>';
+      return;
+    }
+    msg.className = 'small-text ok'; msg.textContent = '키 파일을 받았습니다 (' + k.fingerprint + '). 서버에 등록하세요.';
+    await registerKey(k.spki, k.fingerprint, '<p class="warn small-text">방금 받은 키 파일을 백업했는지 확인하세요.</p>');
+  } catch (e) { msg.className = 'small-text err'; msg.textContent = e.message; }
+}
+pickExisting.onchange = async e => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  try { const k = await readKeyFile(f); await registerKey(k.spki, k.fingerprint); } catch (err) { alert(err.message); }
+};
+async function removeKey() {
+  try {
+    const r = await secureApi({action:'sign_key_remove'}, {title: '전자서명 해제', okText: '해제', danger: true,
+      html: '<p>서버의 서명 키를 지웁니다. 이후 배포는 OTP 로 확인하며 서명 없이 나갑니다.<br><b>SignKey 가 들어간 PC 는 서명 없는 업데이트를 받지 않으니</b>, 해제 전에 SignKey 를 뺀 updater.ini 를 먼저 배포하세요.</p>'});
+    if (r !== null) location.reload();
+  } catch (e) { alert(e.message); }
+}
+</script>
+
+<?php
 $auditName = ['login' => '로그인', 'login_fail' => '로그인 실패', 'stepup_fail' => '재인증 실패', 'stepup_logout' => '재인증 실패로 로그아웃',
               'deploy' => '배포', 'rollback' => '롤백', 'delete_app' => '솔루션 삭제', 'create_app' => '솔루션 등록',
-              'launch_change' => '실행 설정 변경', 'otp_enable' => 'OTP 등록', 'otp_disable' => 'OTP 해제'];
-$auditBad = ['login_fail', 'stepup_fail', 'stepup_logout', 'otp_disable', 'delete_app'];
+              'launch_change' => '실행 설정 변경', 'otp_enable' => 'OTP 등록', 'otp_disable' => 'OTP 해제',
+              'sign_key_set' => '서명 키 등록', 'sign_key_remove' => '서명 해제', 'sign_fail' => '서명 불일치', 'sign_current' => '현재 버전 서명'];
+$auditBad = ['login_fail', 'stepup_fail', 'stepup_logout', 'otp_disable', 'delete_app', 'sign_fail', 'sign_key_remove', 'sign_key_set'];
 $audit = audit_recent(100);
 ?>
 <div class="card">
   <h2>보안 감사 로그 <span class="muted small-text">최근 100건 · data/audit.log</span></h2>
-  <p class="muted small-text">배포·롤백·삭제는 로그인했더라도 그때마다 <?= stepup_kind() === 'otp' ? 'OTP' : '비밀번호' ?>를 다시 확인하고 여기에 기록합니다. 모르는 IP 나 시각이 보이면 즉시 비밀번호를 바꾸고 OTP 를 다시 등록하세요.</p>
+  <p class="muted small-text">배포·롤백은 <?= signing_enabled() ? '전자서명' : (stepup_kind() === 'otp' ? 'OTP 재확인' : '비밀번호 재확인') ?>, 솔루션 삭제·키 변경은 OTP 재확인을 거치며 여기에 기록합니다. 모르는 IP 나 시각이 보이면 즉시 비밀번호를 바꾸고 OTP 를 다시 등록하세요.</p>
   <?php if (!$audit): ?><p class="muted">기록이 없습니다.</p><?php else: ?>
   <div class="tablewrap"><table>
     <thead><tr><th>시각</th><th>구분</th><th>IP</th><th>내용</th></tr></thead>
@@ -76,6 +170,7 @@ $audit = audit_recent(100);
         if (!empty($a['what'])) $detail[] = $a['what'];
         if (!empty($a['to'])) $detail[] = '→ ' . $a['to'];
         if (!empty($a['memo'])) $detail[] = cut($a['memo'], 60);
+        if (!empty($a['signed'])) $detail[] = '서명됨';
     ?>
       <tr>
         <td class="nowrap small-text"><?= h(isset($a['time']) ? $a['time'] : '') ?></td>

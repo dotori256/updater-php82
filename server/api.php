@@ -24,7 +24,7 @@ try {
         if (!valid_app_id($id)) fail('솔루션 ID는 영문/숫자/-/_ 로 40자 이내여야 합니다.');
         $name = trim(post('name')) ?: $id;
         $copyFrom = trim(post('copyFrom'));
-        if ($copyFrom !== '') require_stepup('create_app ' . $id . ' <- ' . $copyFrom); // 파일 복사 = 배포
+        if ($copyFrom !== '') require_publish_auth('create_app ' . $id . ' <- ' . $copyFrom); // 파일 복사 = 배포
         with_lock(function () use ($id, $name, $copyFrom) {
             foreach (list_apps() as $a) if (strcasecmp($a['id'], $id) === 0) fail('이미 있는 ID입니다: ' . $a['id']);
             $s = ['id' => $id, 'name' => $name, 'code' => trim(post('code')), 'memo' => trim(post('memo')), 'created' => now_str()] + app_defaults();
@@ -49,8 +49,8 @@ try {
         // 실행 파일/인자를 바꾸면 PC 에서 다른 프로그램이 실행되므로 재인증
         $cur = need_app();
         if ($cur['launch'] !== $launch || $cur['launchArgs'] !== trim(post('launchArgs'))) {
-            require_stepup('update_app ' . $cur['id']);
-            audit_log('launch_change', ['app' => $cur['id'], 'from' => trim($cur['launch'] . ' ' . $cur['launchArgs']), 'to' => trim($launch . ' ' . trim(post('launchArgs')))]);
+            require_publish_auth('update_app ' . $cur['id']);
+            $launchLog = ['app' => $cur['id'], 'from' => trim($cur['launch'] . ' ' . $cur['launchArgs']), 'to' => trim($launch . ' ' . trim(post('launchArgs')))];
         }
         with_lock(function () use ($launch) {
             $s = need_app();
@@ -65,6 +65,7 @@ try {
             $s['launchArgs'] = trim(post('launchArgs'));
             save_app($s, $runChanged ? ['type' => 'settings', 'memo' => '실행 설정 변경: ' . ($launch ?: '(없음)') . ($s['launchArgs'] ? ' ' . $s['launchArgs'] : '')] : null);
         });
+        if (!empty($launchLog)) audit_log('launch_change', $launchLog);
         json_out(['ok' => true]);
 
     // ----- 솔루션 삭제 -----
@@ -112,7 +113,7 @@ try {
         if (!$items && !$deletes) fail('배포할 파일이 없습니다.');
         $pre = need_app(); $preMax = max_label($pre); // OTP 코드를 쓰기 전에 미리 확인
         if ($label !== '' && $preMax !== '' && semver_cmp($label, $preMax) <= 0) fail('새 버전(' . $label . ')은 지금까지 배포한 가장 높은 버전(' . $preMax . ')보다 높아야 합니다.');
-        require_stepup('deploy ' . post('app'));
+        require_publish_auth('deploy ' . post('app'));
         $result = with_lock(function () use ($items, $deletes, $removeOnPc, $memo, $label) {
             $s = need_app();
             $maxLabel = max_label($s);
@@ -148,25 +149,51 @@ try {
             $s = save_app($s, ['type' => 'deploy', 'memo' => $memo, 'label' => $label, 'added' => $added, 'updated' => $updated, 'deleted' => $deleted]);
             $hashes = [];
             foreach (array_merge($added, $updated) as $p) $hashes[$p] = $s['files'][$p]['sha256'];
-            audit_log('deploy', ['app' => $s['id'], 'label' => $s['versionLabel'], 'build' => $s['version'], 'memo' => $memo, 'files' => $hashes, 'deleted' => $deleted]);
+            audit_log('deploy', ['app' => $s['id'], 'label' => $s['versionLabel'], 'build' => $s['version'], 'memo' => $memo, 'files' => $hashes, 'deleted' => $deleted, 'signed' => !empty($s['signature'])]);
             return ['changed' => true, 'version' => $s['version'], 'label' => $s['versionLabel'], 'added' => count($added), 'updated' => count($updated), 'deleted' => count($deleted), 'same' => count($same)];
         });
         json_out(['ok' => true] + $result);
 
     // ----- PC 삭제 예정 목록에서 빼기 -----
     case 'undelete':
+        require_publish_auth('undelete ' . post('app'));
         with_lock(function () {
             $s = need_app();
             $p = post('path');
             $s['delete'] = array_values(array_filter($s['delete'], function ($d) use ($p) { return $d !== $p; }));
-            save_app($s);
+            save_app($s, ['type' => 'settings', 'memo' => 'PC 삭제 취소: ' . $p]);
         });
+        json_out(['ok' => true]);
+
+    // ----- 현재 버전에 전자서명만 새로 붙이기 (서명 키 등록 직후 / 키 교체 후) -----
+    case 'sign_current':
+        if (!signing_enabled()) fail('서명 키가 등록되어 있지 않습니다.');
+        $r = with_lock(function () {
+            $s = need_app();
+            $s = save_app($s, ['type' => 'settings', 'memo' => '전자서명 적용']);
+            return ['version' => $s['version'], 'label' => $s['versionLabel']];
+        });
+        audit_log('sign_current', ['app' => post('app'), 'build' => $r['version']]);
+        json_out(['ok' => true] + $r);
+
+    // ----- 서명 키 등록/교체/해제 (항상 OTP 재인증) -----
+    case 'sign_key_set':
+        $k = sign_parse_spki(post('spki'));
+        require_stepup('sign_key_set ' . $k['fingerprint']);
+        if (!sign_key_save($k)) fail('data 폴더에 저장하지 못했습니다. 쓰기 권한을 확인하세요.');
+        audit_log('sign_key_set', ['what' => $k['fingerprint']]);
+        json_out(['ok' => true, 'fingerprint' => $k['fingerprint']]);
+
+    case 'sign_key_remove':
+        require_stepup('sign_key_remove');
+        @unlink(SIGNKEY_FILE);
+        audit_log('sign_key_remove');
         json_out(['ok' => true]);
 
     // ----- 이전 버전으로 되돌리기 (새 버전으로 기록됨) -----
     case 'rollback':
         $ver = intval(post('version'));
-        require_stepup('rollback ' . post('app') . ' #' . $ver);
+        require_publish_auth('rollback ' . post('app') . ' #' . $ver);
         $result = with_lock(function () use ($ver) {
             $s = need_app();
             $snap = null; $target = null;
@@ -189,8 +216,8 @@ try {
             $s['files'] = $newFiles;
             if (isset($target['launch'])) { $s['launch'] = $target['launch']; $s['launchArgs'] = $target['launchArgs']; }
             $tLabel = !empty($target['label']) ? $target['label'] : '';
-            audit_log('rollback', ['app' => $s['id'], 'toBuild' => $ver, 'toLabel' => $tLabel]);
             $s = save_app($s, ['type' => 'rollback', 'label' => $tLabel, 'memo' => ($tLabel ? 'v' . $tLabel : '빌드 ' . $ver) . ' 로 롤백', 'added' => $added, 'updated' => $updated, 'deleted' => $deleted]);
+            audit_log('rollback', ['app' => $s['id'], 'toBuild' => $ver, 'toLabel' => $tLabel, 'build' => $s['version'], 'signed' => !empty($s['signature'])]);
             return ['version' => $s['version'], 'label' => $s['versionLabel']];
         });
         json_out(['ok' => true] + $result);

@@ -32,6 +32,7 @@ namespace AutoUpdater
         public string ServerUrl = "";
         public string App = "";
         public string ClientKey = "";
+        public string SignKey = "";     // 배포 전자서명 공개 키 (있으면 서명된 배포만 설치)
         public string LaunchExe = "";
         public string LaunchArgs = "";
         public int TimeoutSec = 15;
@@ -48,6 +49,7 @@ namespace AutoUpdater
                 if (k == "serverurl") c.ServerUrl = v;
                 else if (k == "app") c.App = v;
                 else if (k == "clientkey") c.ClientKey = v;
+                else if (k == "signkey") c.SignKey = v;
                 else if (k == "launchexe") c.LaunchExe = v;
                 else if (k == "launchargs") c.LaunchArgs = v;
                 else if (k == "timeoutsec") { int t; if (int.TryParse(v, out t) && t > 0) c.TimeoutSec = t; }
@@ -147,6 +149,8 @@ namespace AutoUpdater
 
     class Manifest
     {
+        public string Signed = "";      // 서명된 원문 (JSON 문자열)
+        public string Signature = "";   // base64 RSA-SHA256 서명
         public string Name = "";
         public string Version = "";
         public int Build;
@@ -324,7 +328,7 @@ namespace AutoUpdater
     // ======================================================================
     static class Program
     {
-        public const string LauncherVersion = "2.0.1";
+        public const string LauncherVersion = "2.1.0";
         static readonly char Sep = Path.DirectorySeparatorChar;
 
         static string BaseDir, SelfPath, WorkDir, StagingDir, BackupDir, JournalPath, StatePath, LogPath, ReportsPath;
@@ -542,6 +546,7 @@ namespace AutoUpdater
                 if (legacy && ex.Response == null) return Offline(result, ex.Message);
                 throw new Exception("파일 목록을 받지 못했습니다: " + ex.Message);
             }
+            if (Cfg.SignKey.Length > 0) VerifyManifest(m);   // 서명이 없거나 틀리면 여기서 중단 (설치 폴더는 그대로)
             if (legacy && !m.Active) { Status("현재 이 솔루션의 업데이트가 중지되어 있습니다."); return result; }
             State.OfflineRun = m.OfflineRun;
             if (m.Name.Length > 0) State.Name = m.Name;
@@ -1080,6 +1085,15 @@ namespace AutoUpdater
             m.ReleaseNote = Str(root, "releaseNote");
             m.Active = Bool(root, "active", true);
             m.OfflineRun = Bool(root, "offlineRun", true);
+            m.Signed = Str(root, "signed");
+            m.Signature = Str(root, "signature");
+            ReadFileList(root, m);
+            return m;
+        }
+
+        static void ReadFileList(Dictionary<string, object> root, Manifest m)
+        {
+            m.Files.Clear(); m.Delete.Clear();
             object files;
             if (root.TryGetValue("files", out files) && files is ArrayList)
                 foreach (object o in (ArrayList)files)
@@ -1095,7 +1109,63 @@ namespace AutoUpdater
             object del;
             if (root.TryGetValue("delete", out del) && del is ArrayList)
                 foreach (object o in (ArrayList)del) if (o != null) m.Delete.Add(o.ToString());
-            return m;
+        }
+
+        // ------------------------------------------------------------------
+        // 배포 전자서명 확인
+        //  updater.ini 의 SignKey(= base64(modulus).base64(exponent)) 로 manifest 의 signed 원문 서명을 확인하고,
+        //  맞으면 파일 목록/실행 설정/버전은 서명된 원문 값만 사용한다 (서버가 바꿔치기한 바깥 값은 무시).
+        //  다른 솔루션의 서명 원문, 지금보다 낮은 빌드(옛 버전 되돌리기 공격)도 거부.
+        // ------------------------------------------------------------------
+        static void VerifyManifest(Manifest m)
+        {
+            if (m.Signed.Length == 0 || m.Signature.Length == 0)
+                throw new Exception("서명이 없는 업데이트라서 설치하지 않습니다. (관리 사이트에서 전자서명 후 배포하세요)");
+            if (!VerifySignature(Cfg.SignKey, m.Signed, m.Signature))
+                throw new Exception("업데이트 서명이 맞지 않아 설치하지 않습니다. 서버가 변조되었을 수 있으니 관리자에게 알리세요.");
+            JavaScriptSerializer js = new JavaScriptSerializer();
+            js.MaxJsonLength = int.MaxValue;
+            Dictionary<string, object> p = js.Deserialize<Dictionary<string, object>>(m.Signed);
+            if (Cfg.App.Length > 0 && !string.Equals(Str(p, "app"), Cfg.App, StringComparison.OrdinalIgnoreCase))
+                throw new Exception("다른 솔루션(" + Str(p, "app") + ")의 서명이라 설치하지 않습니다.");
+            int build;
+            if (!int.TryParse(Str(p, "build"), out build)) throw new Exception("서명 내용이 잘못되었습니다.");
+            if (build < State.Build)
+                throw new Exception("서버 버전(빌드 " + build + ")이 설치된 버전(빌드 " + State.Build + ")보다 낮아 설치하지 않습니다. (옛 버전 되돌리기 차단)");
+            m.Build = build;
+            m.Version = Str(p, "version");
+            m.Launch = Str(p, "launch");
+            m.LaunchArgs = Str(p, "launchArgs");
+            ReadFileList(p, m);
+            Log("전자서명 확인 완료 (빌드 " + build + ")");
+        }
+
+        // SignKey 에 키를 쉼표로 여러 개 넣을 수 있음 (키 교체 기간에 옛 키 + 새 키)
+        public static bool VerifySignature(string keys, string payload, string sigB64)
+        {
+            foreach (string key in keys.Split(','))
+                if (key.Trim().Length > 0 && VerifyOne(key, payload, sigB64)) return true;
+            return false;
+        }
+
+        static bool VerifyOne(string key, string payload, string sigB64)
+        {
+            try
+            {
+                string[] k = key.Trim().Split('.');
+                if (k.Length != 2) return false;
+                RSAParameters rp = new RSAParameters();
+                rp.Modulus = Convert.FromBase64String(k[0]);
+                rp.Exponent = Convert.FromBase64String(k[1]);
+                if (rp.Modulus.Length < 256) return false;   // 2048비트 미만 거부
+                using (RSACryptoServiceProvider rsa = new RSACryptoServiceProvider())
+                {
+                    rsa.PersistKeyInCsp = false;
+                    rsa.ImportParameters(rp);
+                    return rsa.VerifyData(Encoding.UTF8.GetBytes(payload), "SHA256", Convert.FromBase64String(sigB64));
+                }
+            }
+            catch (Exception ex) { Log("서명 확인 오류: " + ex.Message); return false; }
         }
 
         static string Str(Dictionary<string, object> d, string key)
