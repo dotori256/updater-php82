@@ -53,3 +53,44 @@ if (!$otp && empty($_SESSION['otp_pending'])) $_SESSION['otp_pending'] = otp_new
   })();
 </script>
 <?php endif; ?>
+
+<?php
+$auditName = ['login' => '로그인', 'login_fail' => '로그인 실패', 'stepup_fail' => '재인증 실패', 'stepup_logout' => '재인증 실패로 로그아웃',
+              'deploy' => '배포', 'rollback' => '롤백', 'delete_app' => '솔루션 삭제', 'create_app' => '솔루션 등록',
+              'launch_change' => '실행 설정 변경', 'otp_enable' => 'OTP 등록', 'otp_disable' => 'OTP 해제'];
+$auditBad = ['login_fail', 'stepup_fail', 'stepup_logout', 'otp_disable', 'delete_app'];
+$audit = audit_recent(100);
+?>
+<div class="card">
+  <h2>보안 감사 로그 <span class="muted small-text">최근 100건 · data/audit.log</span></h2>
+  <p class="muted small-text">배포·롤백·삭제는 로그인했더라도 그때마다 <?= stepup_kind() === 'otp' ? 'OTP' : '비밀번호' ?>를 다시 확인하고 여기에 기록합니다. 모르는 IP 나 시각이 보이면 즉시 비밀번호를 바꾸고 OTP 를 다시 등록하세요.</p>
+  <?php if (!$audit): ?><p class="muted">기록이 없습니다.</p><?php else: ?>
+  <div class="tablewrap"><table>
+    <thead><tr><th>시각</th><th>구분</th><th>IP</th><th>내용</th></tr></thead>
+    <tbody>
+    <?php foreach ($audit as $a):
+        $ev = isset($a['event']) ? $a['event'] : '';
+        $detail = [];
+        if (!empty($a['app'])) $detail[] = $a['app'] . (!empty($a['label']) ? ' v' . $a['label'] : '');
+        if (!empty($a['toLabel'])) $detail[] = '→ v' . $a['toLabel'];
+        if (!empty($a['what'])) $detail[] = $a['what'];
+        if (!empty($a['to'])) $detail[] = '→ ' . $a['to'];
+        if (!empty($a['memo'])) $detail[] = cut($a['memo'], 60);
+    ?>
+      <tr>
+        <td class="nowrap small-text"><?= h(isset($a['time']) ? $a['time'] : '') ?></td>
+        <td class="nowrap"><span class="tag <?= in_array($ev, $auditBad, true) ? 'fail' : ($ev === 'deploy' || $ev === 'rollback' ? 'upd' : 'gray') ?>"><?= h(isset($auditName[$ev]) ? $auditName[$ev] : $ev) ?></span></td>
+        <td class="mono nowrap" title="<?= h(isset($a['ua']) ? $a['ua'] : '') ?>"><?= h(isset($a['ip']) ? $a['ip'] : '') ?></td>
+        <td class="small-text"><?= h(implode(' · ', $detail)) ?>
+          <?php if (!empty($a['files'])): ?>
+          <details><summary class="muted"><?= count($a['files']) ?>개 파일 해시</summary>
+            <ul class="hist-files mono"><?php foreach ($a['files'] as $p => $sha): ?><li><?= h($p) ?> <span class="muted"><?= h($sha) ?></span></li><?php endforeach; ?></ul>
+          </details>
+          <?php endif; ?>
+        </td>
+      </tr>
+    <?php endforeach; ?>
+    </tbody>
+  </table></div>
+  <?php endif; ?>
+</div>

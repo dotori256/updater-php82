@@ -244,9 +244,13 @@ async function deploy() {
       items.push({path: it.path, sha256: r.sha256, size: r.size});
       done += it.file.size;
     }
-    msg.textContent = '배포 확정 중...';
-    const r = await api({action:'deploy', app:APP, label, memo:deployMemo.value, items:JSON.stringify(items), deletes:'[]', removeOnPc:''});
     fill.style.width = '100%';
+    msg.textContent = '업로드 완료. 내용을 확인하고 OTP 를 입력하면 배포됩니다.';
+    const r = await secureApi(
+      {action:'deploy', app:APP, label, memo:deployMemo.value, items:JSON.stringify(items), deletes:'[]', removeOnPc:''},
+      {title: 'v' + label + ' 배포 확인', html: deploySummary(items, label, deployMemo.value), okText: '배포 확정', danger: true,
+       check: '파일 목록과 해시를 확인했고, 모든 PC에 배포하는 것에 동의합니다.'});
+    if (r === null) { msg.className = 'small-text warn'; msg.textContent = '취소했습니다. 아직 배포되지 않았습니다.'; btn.disabled = false; bar.classList.add('hidden'); return; }
     if (!r.changed) { msg.className = 'small-text warn'; msg.textContent = '올린 파일이 모두 기존과 같아서 바뀐 것이 없습니다.'; btn.disabled = false; return; }
     msg.className = 'small-text ok';
     msg.textContent = 'v' + r.label + ' 배포 완료: 새 파일 ' + r.added + ', 교체 ' + r.updated + (r.same ? ', 변경 없음 ' + r.same : '');
@@ -255,6 +259,24 @@ async function deploy() {
     msg.className = 'small-text err'; msg.textContent = '실패: ' + e.message + ' (아직 배포되지 않았습니다)';
     btn.disabled = false;
   }
+}
+
+// 배포 확인 창 내용: 파일별 크기/구분/SHA-256 + 실행 파일 경고
+const RISKY = /\.(exe|dll|sys|ocx|com|scr|msi|bat|cmd|ps1|vbs|js|jse|wsf|hta|lnk|bpl)$/i;
+function deploySummary(items, label, memo) {
+  let risky = 0, rows = '';
+  for (const it of items) {
+    const isRisky = RISKY.test(it.path);
+    if (isRisky) risky++;
+    const kind = EXISTING.has(it.path.toLowerCase()) ? '<span class="tag upd">교체</span>' : '<span class="tag new">새 파일</span>';
+    rows += '<tr><td class="mono">' + esc(it.path) + (isRisky ? ' <span class="tag del">실행</span>' : '') + '</td><td class="nowrap">' + fmtSize(it.size) + '</td><td>' + kind + '</td>' +
+      '<td class="mono">' + esc(it.sha256) + (isRisky ? '<br><a href="https://www.virustotal.com/gui/file/' + esc(it.sha256) + '" target="_blank" rel="noopener noreferrer">VirusTotal 에서 검사 결과 보기</a>' : '') + '</td></tr>';
+  }
+  return '<p>솔루션 <b>' + esc(APP) + '</b> 에 <b>v' + esc(label) + '</b> 를 배포합니다. 다음 실행 때 <b>모든 PC</b>에 설치됩니다.</p>' +
+    (memo.trim() ? '<p class="muted small-text">업데이트 내용: ' + esc(memo) + '</p>' : '') +
+    (risky ? '<div class="warnbox">⚠ 실행 가능한 파일 ' + risky + '개가 포함되어 있습니다. 직접 빌드한 파일이 맞는지, 해시가 빌드 PC의 값과 같은지 확인하세요.<br>' +
+      '<span class="small-text">빌드 PC에서 확인: <code>certutil -hashfile 파일이름 SHA256</code></span></div>' : '') +
+    '<div class="tablewrap"><table><thead><tr><th>경로</th><th>크기</th><th>구분</th><th>SHA-256</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
 }
 
 // ---------- 목록 ----------
@@ -271,15 +293,24 @@ async function deleteSelected() {
   const onPc = document.getElementById('removeOnPc').checked;
   const memo = prompt(paths.length + '개 파일을 삭제한 새 버전을 배포합니다.' + (onPc ? ' (각 PC에서도 삭제)' : '') + '\n업데이트 내용을 입력하세요', '파일 삭제: ' + paths.join(', ').slice(0, 80));
   if (memo === null) return;
-  try { const r = await api({action:'deploy', app:APP, label:'', memo, items:'[]', deletes:JSON.stringify(paths), removeOnPc: onPc ? '1' : ''}); alert('v' + r.label + ' 로 배포되었습니다.'); location.reload(); }
+  try {
+    const r = await secureApi({action:'deploy', app:APP, label:'', memo, items:'[]', deletes:JSON.stringify(paths), removeOnPc: onPc ? '1' : ''},
+      {title: '파일 삭제 배포 확인', okText: '삭제 배포', danger: true,
+       html: '<p>아래 ' + paths.length + '개 파일을 뺀 새 버전을 배포합니다.' + (onPc ? ' <b>각 PC에서도 삭제됩니다.</b>' : '') + '</p><ul class="mono">' + paths.map(p => '<li>' + esc(p) + '</li>').join('') + '</ul>'});
+    if (r === null) return;
+    alert('v' + r.label + ' 로 배포되었습니다.'); location.reload();
+  }
   catch (e) { alert(e.message); }
 }
 async function undelete(path) {
   try { await api({action:'undelete', app:APP, path}); location.reload(); } catch (e) { alert(e.message); }
 }
 async function rollback(ver, label) {
-  if (!confirm(label + ' 상태로 롤백할까요?\n새 빌드로 기록되며, 다음 실행 때 모든 PC에 반영됩니다.')) return;
-  try { const r = await api({action:'rollback', app:APP, version:ver}); alert('v' + r.label + ' (빌드 ' + r.version + ') 로 롤백했습니다.'); location.reload(); }
+  try {
+    const r = await secureApi({action:'rollback', app:APP, version:ver},
+      {title: label + ' 로 롤백', okText: '롤백', danger: true, html: '<p><b>' + esc(label) + '</b> 상태로 롤백합니다.<br>새 빌드로 기록되며, 다음 실행 때 모든 PC에 반영됩니다.</p>'});
+    if (r === null) return;
+    alert('v' + r.label + ' (빌드 ' + r.version + ') 로 롤백했습니다.'); location.reload(); }
   catch (e) { alert(e.message); }
 }
 </script>

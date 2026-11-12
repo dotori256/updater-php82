@@ -18,11 +18,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login'])) {
         if ($ok && $needOtp && !otp_check_login(isset($_POST['otp']) ? $_POST['otp'] : '')) $ok = false;
         if ($ok) {
             guard_clear();
+            audit_log('login');
             session_regenerate_id(true);
             $_SESSION['admin'] = true;
             header('Location: ' . ($_SERVER['REQUEST_URI'] ?: './')); exit;
         }
         guard_fail();
+        audit_log('login_fail');
         sleep(1);
         $loginError = $needPw && $needOtp ? '비밀번호 또는 OTP 코드가 틀렸습니다.' : ($needOtp ? 'OTP 코드가 틀렸습니다.' : '비밀번호가 틀렸습니다.');
     }
@@ -56,10 +58,10 @@ if (isset($_GET['page']) && $_GET['page'] === 'security' && $_SERVER['REQUEST_ME
         $step = $pending ? totp_verify($pending, isset($_POST['otp']) ? $_POST['otp'] : '') : false;
         if ($step === false) $secErr = '코드가 맞지 않습니다. 앱에 표시된 현재 6자리를 입력하세요. (NAS 와 휴대폰 시간이 맞는지도 확인)';
         elseif (!otp_save(['secret' => $pending, 'created' => now_str(), 'last_step' => $step])) $secErr = 'data 폴더에 저장하지 못했습니다. 쓰기 권한을 확인하세요.';
-        else { unset($_SESSION['otp_pending']); $secMsg = 'OTP 가 등록되었습니다. 다음 로그인부터 OTP 코드가 필요합니다.'; }
+        else { unset($_SESSION['otp_pending']); audit_log('otp_enable'); $secMsg = 'OTP 가 등록되었습니다. 다음 로그인부터 OTP 코드가 필요합니다.'; }
     } elseif (isset($_POST['otp_disable'])) {
         if (!otp_check_login(isset($_POST['otp']) ? $_POST['otp'] : '')) $secErr = '현재 OTP 코드가 맞지 않아 해제하지 않았습니다.';
-        else { @unlink(OTP_FILE); $secMsg = 'OTP 등록을 해제했습니다.' . (otp_mode() !== 'off' ? ' 다시 등록하기 전까지는 비밀번호만으로 로그인됩니다.' : ''); }
+        else { @unlink(OTP_FILE); audit_log('otp_disable'); $secMsg = 'OTP 등록을 해제했습니다.' . (otp_mode() !== 'off' ? ' 다시 등록하기 전까지는 비밀번호만으로 로그인됩니다.' : ''); }
     }
 }
 

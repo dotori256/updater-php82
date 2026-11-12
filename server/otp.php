@@ -116,3 +116,76 @@ function guard_clear() {
     $g = guard_load(); unset($g[guard_ip()]);
     @file_put_contents(GUARD_FILE, json_encode($g), LOCK_EX);
 }
+
+// ---------- 중요 작업 재인증 (배포/롤백/삭제 직전, step-up) ----------
+// 로그인했더라도 PC 에 실제로 퍼지는 작업은 그때마다 OTP(미등록이면 비밀번호)를 다시 확인합니다.
+define('STEPUP_MAX_FAIL', 5);    // 재인증을 이 횟수만큼 틀리면 강제 로그아웃
+
+// 'ok' | 'reused'(이미 쓴 코드) | 'bad'
+function otp_check_fresh($code) {
+    $d = otp_load();
+    if (!$d) return 'bad';
+    $last = isset($d['last_step']) ? (int)$d['last_step'] : -1;
+    $step = totp_verify($d['secret'], $code, $last);
+    if ($step !== false) {
+        $d['last_step'] = $step;
+        $d['last_stepup'] = now_str();
+        otp_save($d);
+        return 'ok';
+    }
+    return totp_verify($d['secret'], $code, -1) !== false ? 'reused' : 'bad';
+}
+
+function stepup_kind() { return otp_required() ? 'otp' : 'password'; }
+
+// 실패하면 JSON 오류(stepup=true)로 끝냄. $what: 감사 로그용 작업 설명
+function require_stepup($what) {
+    $kind = stepup_kind();
+    $code = isset($_POST['stepup']) ? trim((string)$_POST['stepup']) : '';
+    $out = function ($msg, $code = 403) use ($kind) {
+        json_out(['ok' => false, 'success' => false, 'error' => $msg, 'stepup' => $kind], $code);
+    };
+    if (guard_locked_sec() > 0) { session_destroy(); $out('인증 실패가 많아 잠겼습니다. 잠시 뒤 다시 로그인하세요.', 401); }
+    if ($code === '') $out($kind === 'otp' ? 'OTP 코드를 입력하세요.' : '비밀번호를 다시 입력하세요.');
+
+    if ($kind === 'otp') {
+        $r = otp_check_fresh($code);
+        if ($r === 'reused') $out('방금 사용한 코드입니다. 앱에 새 코드가 나오면 입력하세요. (최대 30초)');
+        $ok = $r === 'ok';
+    } else {
+        $ok = hash_equals(ADMIN_PASSWORD, $code);
+    }
+    if (!$ok) {
+        $_SESSION['stepup_fail'] = (isset($_SESSION['stepup_fail']) ? $_SESSION['stepup_fail'] : 0) + 1;
+        guard_fail();
+        audit_log('stepup_fail', ['what' => $what, 'count' => $_SESSION['stepup_fail']]);
+        sleep(1);
+        if ($_SESSION['stepup_fail'] >= STEPUP_MAX_FAIL) {
+            audit_log('stepup_logout', ['what' => $what]);
+            session_destroy();
+            $out('재인증을 ' . STEPUP_MAX_FAIL . '번 틀려 로그아웃되었습니다. 다시 로그인하세요.', 401);
+        }
+        $out(($kind === 'otp' ? 'OTP 코드가 틀렸습니다.' : '비밀번호가 틀렸습니다.') . ' (' . $_SESSION['stepup_fail'] . '/' . STEPUP_MAX_FAIL . ')');
+    }
+    $_SESSION['stepup_fail'] = 0;
+}
+
+// ---------- 감사 로그 (누가 언제 어디서 무엇을) ----------
+// data/audit.log 에 한 줄씩 JSON 으로 쌓음. 2MB 넘으면 audit.log.1 로 넘기고 새로 시작
+define('AUDIT_FILE', DATA_DIR . '/audit.log');
+
+function audit_log($event, $data = []) {
+    if (!is_dir(DATA_DIR)) @mkdir(DATA_DIR, 0775, true);
+    if (is_file(AUDIT_FILE) && filesize(AUDIT_FILE) > 2 * 1024 * 1024) @rename(AUDIT_FILE, AUDIT_FILE . '.1');
+    $row = ['time' => now_str(), 'event' => $event, 'ip' => guard_ip(),
+            'ua' => substr(isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : '', 0, 200)] + $data;
+    @file_put_contents(AUDIT_FILE, json_encode($row, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n", FILE_APPEND | LOCK_EX);
+}
+
+function audit_recent($n = 100) {
+    if (!is_file(AUDIT_FILE)) return [];
+    $lines = @file(AUDIT_FILE, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+    $out = [];
+    foreach (array_reverse(array_slice($lines, -$n)) as $l) { $r = json_decode($l, true); if (is_array($r)) $out[] = $r; }
+    return $out;
+}
