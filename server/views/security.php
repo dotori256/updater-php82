@@ -68,12 +68,8 @@ if ($sk) foreach (list_apps() as $a) if ($a['files'] && !sign_state_ok($a)) $uns
 
   <?php if ($sk): ?>
     <p>등록된 키: <b class="mono" style="font-size:14px"><?= h($sk['fingerprint']) ?></b> <span class="muted small-text">RSA <?= intval($sk['bits']) ?> · <?= h($sk['created']) ?> 등록</span></p>
-    <h3 style="font-size:14px">PC 에 적용하기</h3>
-    <ol class="small-text">
-      <li>각 솔루션의 <b>설정 / 설치</b> 탭에서 updater.ini 를 새로 받으면 아래 <code>SignKey=</code> 줄이 들어 있습니다.</li>
-      <li>그 updater.ini 를 <b>배포</b> 탭에서 bin 바로 아래에 올려 배포합니다. (함께 새 Updater.exe 도 배포)</li>
-      <li>PC 가 한 번 업데이트를 받으면 그다음부터는 서명된 배포만 설치합니다.</li>
-    </ol>
+    <p class="small-text">PC 에 적용: 아래 <b>기존 PC 런처 교체</b>에서 [새 런처 배포]를 누르면 새 Updater.exe 와 공개 키 파일(updater.signkey)이 모든 솔루션에 배포됩니다.
+      PC 가 한 번 업데이트를 받으면 그다음부터는 서명된 배포만 설치합니다. (새로 설치하는 PC 는 [설정 / 설치] 탭의 updater.ini 에 SignKey 가 들어 있습니다)</p>
     <pre style="white-space:pre-wrap;word-break:break-all">SignKey=<?= h(sign_ini_value()) ?></pre>
     <?php if ($unsigned): ?>
       <p class="warn">⚠ 현재 버전에 서명이 없는 솔루션: <?php foreach ($unsigned as $a): ?><a href="?app=<?= urlencode($a['id']) ?>"><?= h($a['name']) ?></a> <?php endforeach; ?> — 솔루션 배포 탭의 [지금 서명]을 누르세요.</p>
@@ -83,7 +79,7 @@ if ($sk) foreach (list_apps() as $a) if ($a['files'] && !sign_state_ok($a)) $uns
       <button type="button" class="secondary" onclick="pickExisting.click()">다른 키 파일로 교체</button>
       <button type="button" class="danger" onclick="removeKey()">전자서명 해제</button>
     </div>
-    <p class="muted small-text">키 교체 순서: ① [새 키로 교체]로 새 키 파일을 만들면 <code>SignKey=옛키,새키</code> 줄이 나옵니다 → ② 그 줄을 넣은 updater.ini 를 <b>지금 키로</b> 서명해 배포 → ③ PC 들이 받은 뒤 [다른 키 파일로 교체]로 새 키 파일을 등록.</p>
+    <p class="muted small-text">키 교체 순서: ① [새 키로 교체]로 새 키 파일을 만들면 <code>SignKey=옛키,새키</code> 줄이 나옵니다 → ② 그 한 줄만 넣은 텍스트 파일 <code>updater.signkey</code> 를 각 솔루션 bin 바로 아래로 <b>지금 키로</b> 서명해 배포 → ③ PC 들이 받은 뒤 [다른 키 파일로 교체]로 새 키 파일을 등록.</p>
   <?php else: ?>
     <div class="row">
       <button type="button" onclick="showCreate()" <?= sign_available() ? '' : 'disabled' ?>>서명 키 만들기</button>
@@ -125,7 +121,7 @@ async function createKey() {
     kp1.value = kp2.value = '';
     if (SIGNING) {   // 교체: 바로 등록하지 않고, PC 에 옛 키 + 새 키를 먼저 배포하도록 안내
       msg.className = 'small-text ok';
-      msg.innerHTML = '새 키 파일을 받았습니다 (' + esc(k.fingerprint) + '). 아직 서버에는 등록하지 않았습니다.<br>아래 줄을 넣은 updater.ini 를 지금 키로 배포하고, PC 들이 받은 뒤 [다른 키 파일로 교체]로 새 키 파일을 등록하세요.' +
+      msg.innerHTML = '새 키 파일을 받았습니다 (' + esc(k.fingerprint) + '). 아직 서버에는 등록하지 않았습니다.<br>아래 한 줄만 넣은 updater.signkey 파일을 각 솔루션에 지금 키로 배포하고, PC 들이 받은 뒤 [다른 키 파일로 교체]로 새 키 파일을 등록하세요.' +
         '<pre style="white-space:pre-wrap;word-break:break-all">SignKey=' + esc(SIGN_INI + ',' + k.ini) + '</pre>';
       return;
     }
@@ -143,6 +139,60 @@ async function removeKey() {
     const r = await secureApi({action:'sign_key_remove'}, {title: '전자서명 해제', okText: '해제', danger: true,
       html: '<p>서버의 서명 키를 지웁니다. 이후 배포는 OTP 로 확인하며 서명 없이 나갑니다.<br><b>SignKey 가 들어간 PC 는 서명 없는 업데이트를 받지 않으니</b>, 해제 전에 SignKey 를 뺀 updater.ini 를 먼저 배포하세요.</p>'});
     if (r !== null) location.reload();
+  } catch (e) { alert(e.message); }
+}
+</script>
+
+<?php
+$lfSha = is_file(LAUNCHER_SRC) ? hash_file('sha256', LAUNCHER_SRC) : '';
+$keyLine = $sk ? "; 배포 전자서명 공개 키 (관리 사이트에서 자동 배포, 지우지 마세요)\r\nSignKey=" . sign_ini_value() . "\r\n" : '';
+$keySha = $sk ? hash('sha256', $keyLine) : '';
+$lrows = []; $lneed = 0;
+foreach (list_apps() as $id => $a) {
+    if (!$a['files']) continue;
+    $exe = null; $kf = null;
+    foreach ($a['files'] as $p => $f) { if (strcasecmp($p, 'Updater.exe') === 0) $exe = $f; if (strcasecmp($p, SIGNKEY_PC_FILE) === 0) $kf = $f; }
+    $exeOk = $exe && $exe['sha256'] === $lfSha;
+    $keyOk = !$sk || ($kf && $kf['sha256'] === $keySha);
+    if (!$exeOk || !$keyOk) $lneed++;
+    $vers = [];
+    try { foreach (db_all('SELECT launcher_version v, COUNT(*) n FROM client_install WHERE app_id = ? GROUP BY launcher_version', [$id]) as $r) $vers[] = ($r['v'] ?: '?') . ' × ' . $r['n']; } catch (Exception $e) {}
+    $lrows[] = [$a, $exe, $exeOk, $keyOk, $vers];
+}
+?>
+<div class="card" id="launcher">
+  <h2>기존 PC 런처 교체 <span class="muted small-text">서버 Updater.exe SHA-256 <?= h(substr($lfSha, 0, 12)) ?>…</span></h2>
+  <p class="small-text">이미 설치된 PC 의 런처(Updater.exe)를 이 서버에 있는 새 버전으로 바꿉니다. 각 솔루션에 새 런처<?= $sk ? '와 공개 키 파일(updater.signkey)' : '' ?>를 넣어 배포하면,
+    PC 가 다음에 실행될 때 기존 런처가 자기 자신을 새 런처로 교체합니다. 각 PC 의 updater.ini(서버 주소 등 설정)는 건드리지 않습니다.</p>
+  <?php if (!$lrows): ?><p class="muted">배포 중인 솔루션이 없습니다.</p><?php else: ?>
+  <div class="tablewrap"><table>
+    <thead><tr><th>솔루션</th><th>배포 중인 런처</th><?php if ($sk): ?><th>공개 키 파일</th><?php endif; ?><th>PC 가 보고한 런처 버전</th></tr></thead>
+    <tbody>
+    <?php foreach ($lrows as $r): ?>
+      <tr>
+        <td><a href="?app=<?= urlencode($r[0]['id']) ?>"><?= h($r[0]['name']) ?></a></td>
+        <td><?= $r[2] ? '<span class="tag success">최신</span>' : ($r[1] ? '<span class="tag upd">구버전</span>' : '<span class="tag gray">없음</span>') ?></td>
+        <?php if ($sk): ?><td><?= $r[3] ? '<span class="tag success">배포됨</span>' : '<span class="tag upd">필요</span>' ?></td><?php endif; ?>
+        <td class="small-text"><?= h(implode(', ', $r[4]) ?: '-') ?></td>
+      </tr>
+    <?php endforeach; ?>
+    </tbody>
+  </table></div>
+  <div class="row" style="margin-top:10px">
+    <button type="button" onclick="upgradeLauncher()" <?= $lneed ? '' : 'disabled' ?>><?= $lneed ? '새 런처 배포 (' . $lneed . '개 솔루션)' : '모두 최신입니다' ?></button>
+    <span class="muted small-text">PC 가 실제로 바뀌었는지는 각 솔루션의 PC 현황에서 런처 버전(2.1.0)으로 확인하세요.</span>
+  </div>
+  <?php endif; ?>
+</div>
+<script>
+async function upgradeLauncher() {
+  try {
+    const r = await secureApi({action:'upgrade_launcher'}, {title: '기존 PC 런처 교체', okText: '배포', danger: true, publish: true,
+      html: '<p><b><?= $lneed ?>개 솔루션</b>에 새 런처(Updater.exe)<?= $sk ? '와 공개 키 파일' : '' ?>를 새 버전으로 배포합니다. 각 PC 는 다음 실행 때 런처를 교체합니다.</p>' +
+        '<p class="mono small-text">Updater.exe SHA-256 <?= h($lfSha) ?></p>'});
+    if (r === null) return;
+    alert('배포했습니다:\n' + (r.done.join('\n') || '바뀐 것 없음'));
+    location.reload();
   } catch (e) { alert(e.message); }
 }
 </script>

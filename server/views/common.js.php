@@ -12,7 +12,7 @@ function api(fields, file, onProgress) {
       let r; try { r = JSON.parse(xhr.responseText); } catch (e) { return reject(new Error('서버 응답 오류 (HTTP ' + xhr.status + ')' + (xhr.status == 413 ? ' 파일이 너무 큽니다' : ''))); }
       if (r.ok) return resolve(r);
       const err = new Error(r.error || '실패');
-      err.stepup = r.stepup || ''; err.status = xhr.status; err.needSign = !!r.needSign; err.payload = r.payload || '';
+      err.stepup = r.stepup || ''; err.status = xhr.status; err.needSign = !!r.needSign; err.payload = r.payload || ''; err.payloads = r.payloads || null;
       reject(err);
     };
     xhr.onerror = () => reject(new Error('네트워크 오류'));
@@ -129,8 +129,14 @@ function secureApi(fields, opts) {
           try { r = await api(fields); }
           catch (err) {
             if (!err.needSign) throw err;
-            const signature = await signWithKeyFile(keyFile.files[0], v, err.payload);
-            r = await api(Object.assign({}, fields, {signature}));
+            if (err.payloads) {   // 여러 솔루션을 한 번에 (런처 일괄 업그레이드)
+              const signatures = {};
+              for (const id in err.payloads) { errEl.textContent = '서명 중... ' + id; signatures[id] = await signWithKeyFile(keyFile.files[0], v, err.payloads[id]); }
+              r = await api(Object.assign({}, fields, {signatures: JSON.stringify(signatures)}));
+            } else {
+              const signature = await signWithKeyFile(keyFile.files[0], v, err.payload);
+              r = await api(Object.assign({}, fields, {signature}));
+            }
           }
         } else {
           r = await api(Object.assign({}, fields, {stepup: v}));

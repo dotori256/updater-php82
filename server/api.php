@@ -165,6 +165,42 @@ try {
         });
         json_out(['ok' => true]);
 
+    // ----- 런처 일괄 업그레이드: 모든(또는 지정) 솔루션에 새 Updater.exe (+ 공개 키) 배포 -----
+    // 서명 사용 시: 서명 없으면 솔루션별 payload 를 돌려주고, signatures {솔루션ID: 서명} 과 함께 다시 받으면 반영
+    case 'upgrade_launcher':
+        require_publish_auth('upgrade_launcher');
+        $only = post_json('apps');
+        $sigs = post_json('signatures');
+        $done = with_lock(function () use ($only, $sigs) {
+            $lf = launcher_files();
+            $plans = []; $need = [];
+            foreach (list_apps() as $id => $s) {
+                if (!$s['files'] || ($only && !in_array($id, $only, true))) continue;
+                $plan = launcher_upgrade_plan($s, $lf);
+                if (!$plan) continue;
+                if (signing_enabled()) {
+                    $preview = $plan[0]; bump_meta($preview, $plan[1]);
+                    $payload = signed_payload($preview);
+                    if (empty($sigs[$id]) || !sign_verify($payload, $sigs[$id])) $need[$id] = $payload;
+                }
+                $plans[$id] = $plan;
+            }
+            if ($need) json_out(['ok' => false, 'success' => false, 'needSign' => true, 'payloads' => $need,
+                'error' => $sigs ? '서명이 맞지 않습니다. 등록된 키의 파일이 맞는지 확인하세요.' : '전자서명이 필요합니다.'], 409);
+            $done = [];
+            foreach ($plans as $id => $plan) {
+                $GLOBALS['SIGN_OVERRIDE'] = isset($sigs[$id]) ? $sigs[$id] : '';
+                $s = save_app($plan[0], $plan[1]);
+                $hashes = [];
+                foreach (array_merge($plan[1]['added'], $plan[1]['updated']) as $p) $hashes[$p] = $s['files'][$p]['sha256'];
+                audit_log('deploy', ['app' => $id, 'label' => $s['versionLabel'], 'build' => $s['version'], 'memo' => $plan[1]['memo'], 'files' => $hashes, 'deleted' => [], 'signed' => !empty($s['signature'])]);
+                $done[] = $id . ' v' . $s['versionLabel'];
+            }
+            unset($GLOBALS['SIGN_OVERRIDE']);
+            return $done;
+        });
+        json_out(['ok' => true, 'done' => $done]);
+
     // ----- 현재 버전에 전자서명만 새로 붙이기 (서명 키 등록 직후 / 키 교체 후) -----
     case 'sign_current':
         if (!signing_enabled()) fail('서명 키가 등록되어 있지 않습니다.');

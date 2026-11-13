@@ -194,9 +194,8 @@ function load_app($id) {
 
 function load_history($id) { return read_json(app_history_file($id), []); }
 
-// 상태 저장 → 공개 Manifest 재생성 → 배포 이력 기록
-// $change: ['type' => 'deploy|rollback|settings|create', 'memo', 'label', 'added', 'updated', 'deleted']
-function save_app($s, $change = null) {
+// 변경 기록용 메타 반영 (빌드 번호 증가, 정렬) - 저장하지 않음. 서명할 내용을 미리 계산할 때도 사용
+function bump_meta(&$s, $change) {
     if ($change !== null) {
         $s['version'] = intval($s['version']) + 1;     // 빌드 번호 (내부 비교용, 항상 증가)
         $s['updated'] = now_str();
@@ -205,6 +204,12 @@ function save_app($s, $change = null) {
     }
     uksort($s['files'], 'strnatcasecmp');
     $s['delete'] = array_values(array_unique($s['delete']));
+}
+
+// 상태 저장 → 공개 Manifest 재생성 → 배포 이력 기록
+// $change: ['type' => 'deploy|rollback|settings|create', 'memo', 'label', 'added', 'updated', 'deleted']
+function save_app($s, $change = null) {
+    bump_meta($s, $change);
     // 전자서명 사용 중이면 PC 가 받는 내용이 바뀌는 변경은 서명이 있어야 저장 (없으면 여기서 payload 를 돌려주고 끝)
     if ($change !== null && signing_enabled()) sign_require($s);
     write_json(app_state_file($s['id']), $s);

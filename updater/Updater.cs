@@ -361,6 +361,9 @@ namespace AutoUpdater
 
             try { ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072; } catch { }   // TLS 1.2
             Cfg = Config.Load(Path.Combine(BaseDir, "updater.ini"));
+            // 관리 사이트가 배포하는 공개 키 파일 (updater.ini 를 덮어쓰지 않고 PC 마다 다른 설정을 지키기 위해 따로 둠)
+            string extraKey = Ini.Get(Ini.Read(Path.Combine(BaseDir, "updater.signkey")), "signkey");
+            if (extraKey.Length > 0) Cfg.SignKey = Cfg.SignKey.Length > 0 ? Cfg.SignKey + "," + extraKey : extraKey;
             State = LocalState.Load(StatePath);
             MigrateLegacy();
 

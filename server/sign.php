@@ -69,7 +69,7 @@ function sign_verify($payload, $sigB64) {
 // save_app 에서 호출: 서명이 없거나 틀리면 payload 를 돌려주고 요청을 끝냄 (아무것도 저장하지 않음)
 function sign_require(&$s) {
     $payload = signed_payload($s);
-    $sig = isset($_POST['signature']) ? trim((string)$_POST['signature']) : '';
+    $sig = isset($GLOBALS['SIGN_OVERRIDE']) ? (string)$GLOBALS['SIGN_OVERRIDE'] : (isset($_POST['signature']) ? trim((string)$_POST['signature']) : '');
     if ($sig === '') json_out(['ok' => false, 'success' => false, 'needSign' => true, 'payload' => $payload, 'error' => '전자서명이 필요합니다.'], 409);
     if (!sign_verify($payload, $sig)) {
         audit_log('sign_fail', ['app' => $s['id'], 'build' => intval($s['version'])]);
@@ -90,4 +90,39 @@ function sign_state_ok($s) {
     return !empty($s['signature']) && !empty($s['signed'])
         && strpos($s['signed'], '"build":' . intval($s['version']) . ',') !== false
         && sign_verify($s['signed'], $s['signature']);
+}
+
+// ---------- 런처(Updater.exe) 일괄 업그레이드 ----------
+// 서버의 tools/Updater.exe 와 (서명 사용 시) 공개 키 파일 updater.signkey 를 솔루션 파일 목록에 넣어 배포.
+// 기존 PC 의 런처(2.0.x)도 Manifest 에 있는 Updater.exe 를 받아 자기 자신을 교체할 수 있음.
+define('LAUNCHER_SRC', APP_ROOT . '/tools/Updater.exe');
+define('SIGNKEY_PC_FILE', 'updater.signkey');
+
+function blob_put_bytes($bytes) {
+    $sha = hash('sha256', $bytes);
+    $blob = FILES_DIR . '/' . $sha;
+    if (!is_file($blob) && @file_put_contents($blob, $bytes) === false) fail('files 폴더에 저장 실패 (쓰기 권한 확인)');
+    @touch($blob); @chmod($blob, 0644);
+    return ['sha256' => $sha, 'size' => strlen($bytes)];
+}
+function launcher_files() {
+    if (!is_file(LAUNCHER_SRC)) fail('서버에 tools/Updater.exe 가 없습니다.');
+    $out = ['Updater.exe' => blob_put_bytes(file_get_contents(LAUNCHER_SRC))];
+    if (signing_enabled()) $out[SIGNKEY_PC_FILE] = blob_put_bytes("; 배포 전자서명 공개 키 (관리 사이트에서 자동 배포, 지우지 마세요)\r\nSignKey=" . sign_ini_value() . "\r\n");
+    return $out;
+}
+// 솔루션 상태에 런처 파일을 반영한 결과 [새 상태, change] (바뀐 게 없으면 null)
+function launcher_upgrade_plan($s, $lf) {
+    $added = []; $updated = [];
+    foreach ($lf as $name => $f) {
+        $path = $name;
+        foreach (array_keys($s['files']) as $k) if (strcasecmp($k, $name) === 0) { $path = $k; break; }
+        $old = isset($s['files'][$path]) ? $s['files'][$path] : null;
+        if ($old && $old['sha256'] === $f['sha256']) continue;
+        $s['files'][$path] = $f + ['uploaded' => now_str()];
+        $s['delete'] = array_values(array_filter($s['delete'], function ($d) use ($path) { return strcasecmp($d, $path) !== 0; }));
+        if ($old) $updated[] = $path; else $added[] = $path;
+    }
+    if (!$added && !$updated) return null;
+    return [$s, ['type' => 'deploy', 'label' => suggest_label($s), 'memo' => '런처 업그레이드' . (isset($lf[SIGNKEY_PC_FILE]) ? ' (전자서명 확인 적용)' : ''), 'added' => $added, 'updated' => $updated, 'deleted' => []]];
 }
