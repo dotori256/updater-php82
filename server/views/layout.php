@@ -76,6 +76,15 @@ function page_head($title) { ?>
   .hidden { display:none !important; }
   .form-grid { display:grid; grid-template-columns:140px 1fr; gap:10px 14px; align-items:center; }
   .form-grid > label { color:var(--muted); }
+  dialog.stepup { border:1px solid var(--line); border-radius:10px; padding:20px; width:min(760px, calc(100vw - 32px)); max-height:calc(100vh - 40px); overflow:auto; color:var(--text); background:var(--card); }
+  dialog.stepup::backdrop { background:rgba(20,24,33,.55); }
+  dialog.stepup h2 { font-size:16px; margin:0 0 12px; }
+  dialog.stepup .su-code { width:100%; font-size:18px; letter-spacing:4px; padding:9px 11px; }
+  .stepup-body { max-height:50vh; overflow:auto; margin-bottom:8px; }
+  .stepup-body table { font-size:12px; }
+  .stepup-lock { background:var(--accent-bg); padding:8px 10px; border-radius:6px; margin:12px 0 8px; }
+  .stepup-check { white-space:normal; }
+  .warnbox { background:#fff4e0; color:#7a4f0e; padding:8px 10px; border-radius:6px; margin:8px 0; }
   @media (max-width:640px) { .hide-sm { display:none; } .form-grid { grid-template-columns:1fr; } }
 </style>
 </head>
@@ -103,6 +112,10 @@ function result_tag($r) {
 function script_common() { ?>
 <script>
 const CSRF = <?= json_encode(csrf_token()) ?>;
+const STEPUP = <?= json_encode(stepup_kind()) ?>;
+const SIGNING = <?= signing_enabled() ? 'true' : 'false' ?>;
+const SIGN_FP = <?= json_encode(($k = sign_key()) ? $k['fingerprint'] : '') ?>;
+const SIGN_INI = <?= json_encode(sign_ini_value()) ?>;
 <?php include __DIR__ . '/common.js.php'; ?>
 </script>
 <?php }

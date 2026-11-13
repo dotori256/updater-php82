@@ -11,6 +11,7 @@ define('SERVER_VERSION', '1.1.0');
 
 date_default_timezone_set(defined('TIMEZONE') ? TIMEZONE : 'Asia/Seoul');
 require_once __DIR__ . '/otp.php';
+require_once __DIR__ . '/sign.php';
 
 // ---------- 공통 ----------
 function admin_boot() {
@@ -193,9 +194,8 @@ function load_app($id) {
 
 function load_history($id) { return read_json(app_history_file($id), []); }
 
-// 상태 저장 → 공개 Manifest 재생성 → 배포 이력 기록
-// $change: ['type' => 'deploy|rollback|settings|create', 'memo', 'label', 'added', 'updated', 'deleted']
-function save_app($s, $change = null) {
+// 변경 기록용 메타 반영 (빌드 번호 증가, 정렬) - 저장하지 않음. 서명할 내용을 미리 계산할 때도 사용
+function bump_meta(&$s, $change) {
     if ($change !== null) {
         $s['version'] = intval($s['version']) + 1;     // 빌드 번호 (내부 비교용, 항상 증가)
         $s['updated'] = now_str();
@@ -204,6 +204,14 @@ function save_app($s, $change = null) {
     }
     uksort($s['files'], 'strnatcasecmp');
     $s['delete'] = array_values(array_unique($s['delete']));
+}
+
+// 상태 저장 → 공개 Manifest 재생성 → 배포 이력 기록
+// $change: ['type' => 'deploy|rollback|settings|create', 'memo', 'label', 'added', 'updated', 'deleted']
+function save_app($s, $change = null) {
+    bump_meta($s, $change);
+    // 전자서명 사용 중이면 PC 가 받는 내용이 바뀌는 변경은 서명이 있어야 저장 (없으면 여기서 payload 를 돌려주고 끝)
+    if ($change !== null && signing_enabled()) sign_require($s);
     write_json(app_state_file($s['id']), $s);
     write_manifest($s);
 
@@ -233,7 +241,7 @@ function save_app($s, $change = null) {
 function write_manifest($s) {
     $files = [];
     foreach ($s['files'] as $path => $f) $files[] = ['path' => $path, 'size' => $f['size'], 'hash' => $f['sha256'], 'sha256' => $f['sha256']];
-    write_json(MANIFEST_DIR . '/' . $s['id'] . '.json', [
+    $m = [
         'solutionId'  => $s['id'],
         'name'        => $s['name'],
         'version'     => $s['versionLabel'] ?: (string)$s['version'],
@@ -248,7 +256,13 @@ function write_manifest($s) {
         'launchArgs'  => $s['launchArgs'],
         'files'       => $files,
         'delete'      => $s['delete'],
-    ]);
+    ];
+    // 서명된 내용: Updater 에 SignKey 가 있으면 위 값 대신 이것만 믿고 따름
+    if (!empty($s['signed']) && !empty($s['signature']) && strpos($s['signed'], '"build":' . intval($s['version']) . ',') !== false) {
+        $m['signed'] = $s['signed'];
+        $m['signature'] = $s['signature'];
+    }
+    write_json(MANIFEST_DIR . '/' . $s['id'] . '.json', $m);
 }
 
 // 어떤 솔루션의 현재 상태나 보관 이력에도 없는 파일 본문 삭제
@@ -288,7 +302,8 @@ function updater_ini($app) {
         . "AutoStart=1\r\n"
         . "TimeoutSec=15\r\n"
         . "ShowWindow=1\r\n"
-        . "DeleteRemovedFiles=1\r\n";
+        . "DeleteRemovedFiles=1\r\n"
+        . (signing_enabled() ? "; 배포 전자서명 확인용 공개 키 (서명이 맞지 않는 업데이트는 설치하지 않음)\r\nSignKey=" . sign_ini_value() . "\r\n" : "");
 }
 
 // 문자열 자르기 (mbstring 없는 서버 대비)

@@ -17,6 +17,9 @@ else $add('pdo_mysql 확장', extension_loaded('pdo_mysql'), extension_loaded('p
 try { db(); $add('DB 연결', true, $isSqlite ? 'SQLite (data/updater.db)' : 'MySQL'); }
 catch (Exception $e) { $add('DB 연결', false, $e->getMessage(), $isSqlite ? 'data 폴더 쓰기 권한과 pdo_sqlite 확장을 확인' : 'config.php 의 DB_DSN/계정 확인'); }
 $add('mbstring 확장 (선택)', extension_loaded('mbstring'), extension_loaded('mbstring') ? '사용 가능' : '없음 (없어도 동작)', '');
+$add('openssl 확장 (전자서명)', sign_available(), sign_available() ? '사용 가능' : '없음', 'Web Station › PHP 프로필 › 확장에서 openssl 체크 (배포 전자서명에 필요)');
+$httpsOn = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https');
+$add('HTTPS 접속 (전자서명)', $httpsOn, $httpsOn ? '사용 중' : 'http 로 접속 중', '브라우저는 https 에서만 서명 기능을 허용합니다. 시놀로지 인증서(Let\'s Encrypt)로 https 를 켜세요');
 foreach (['files', 'manifests', 'data'] as $d) {
     $path = APP_ROOT . '/' . $d;
     $ok = is_dir($path) && is_writable($path);

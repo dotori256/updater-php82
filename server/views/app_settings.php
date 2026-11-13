@@ -62,16 +62,29 @@ $hasUpdaterExe = is_file(APP_ROOT . '/tools/Updater.exe');
 const APP = <?= json_encode($s['id']) ?>;
 document.getElementById('settingsForm').onsubmit = async e => {
   e.preventDefault();
+  const f = {action:'update_app', app:APP, name:setName.value, code:setCode.value, memo:setMemo.value, notice:setNotice.value,
+             active: setActive.checked ? '1' : '', offlineRun: setOffline.checked ? '1' : '', launch:setLaunch.value, launchArgs:setArgs.value};
   try {
-    await api({action:'update_app', app:APP, name:setName.value, code:setCode.value, memo:setMemo.value, notice:setNotice.value,
-               active: setActive.checked ? '1' : '', offlineRun: setOffline.checked ? '1' : '', launch:setLaunch.value, launchArgs:setArgs.value});
+    await api(f);
     location.reload();
-  } catch (err) { alert(err.message); }
+  } catch (err) {
+    if (!err.stepup && !err.needSign) { alert(err.message); return; }
+    // 실행 파일/인자를 바꾸면 PC 에서 다른 프로그램이 실행되므로 재인증
+    try {
+      const r = await secureApi(f, {title: '실행 설정 변경 확인', okText: '저장', publish: true,
+        html: '<p>각 PC에서 실행되는 프로그램이 바뀝니다.</p><p class="mono">' + esc((setLaunch.value + ' ' + setArgs.value).trim() || '(없음)') + '</p>'});
+      if (r !== null) location.reload();
+    } catch (e2) { alert(e2.message); }
+  }
 };
 async function deleteApp() {
   const v = prompt('정말 삭제하려면 솔루션 ID(' + APP + ')를 입력하세요.');
   if (v === null) return;
-  try { await api({action:'delete_app', app:APP, confirm:v}); location.href = './'; }
+  try {
+    const r = await secureApi({action:'delete_app', app:APP, confirm:v}, {title: '솔루션 삭제', okText: '삭제', danger: true,
+      html: '<p><b>' + esc(APP) + '</b> 솔루션과 배포 이력, PC 현황을 모두 삭제합니다.</p>'});
+    if (r !== null) location.href = './';
+  }
   catch (e) { alert(e.message); }
 }
 </script>

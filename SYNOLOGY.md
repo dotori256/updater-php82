@@ -44,7 +44,7 @@ DSM 7.2 기준입니다. 메뉴 이름은 DSM 버전이나 언어 설정에 따�
 
 **확장 (Extensions)**: 아래 항목을 체크합니다.
 - `pdo_sqlite`, `sqlite3`: **필수**. PC 현황과 업데이트 이력 DB
-- `openssl`, `curl`, `mbstring`, `zip`: 목록에 있으면 체크
+- `openssl` (배포 전자서명에 필요, 꼭 체크), `curl`, `mbstring`, `zip`: 목록에 있으면 체크
 - MySQL(MariaDB 10 패키지)을 쓰려면 `pdo_mysql` 도 체크
 
 **코어 (Core)**: 아래 항목을 검색해서 값을 바꿉니다. 업로드할 가장 큰 파일보다 크게 잡으세요.

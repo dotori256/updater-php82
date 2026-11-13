@@ -103,9 +103,13 @@ $pct = $totInst ? round($totLatest * 100 / $totInst) : 0;
 <script>
 document.getElementById('createForm').onsubmit = async e => {
   e.preventDefault();
+  const f = {action:'create_app', id:newId.value.trim(), name:newName.value.trim(), code:newCode.value.trim(), copyFrom:copyFrom.value};
   try {
-    const r = await api({action:'create_app', id:newId.value.trim(), name:newName.value.trim(), code:newCode.value.trim(), copyFrom:copyFrom.value});
-    location.href = '?app=' + encodeURIComponent(r.id);
+    const r = f.copyFrom
+      ? await secureApi(f, {title: '파일 복사하여 솔루션 등록', okText: '등록', publish: true,
+          html: '<p><b>' + esc(f.copyFrom) + '</b> 의 파일을 복사해 <b>' + esc(f.id) + '</b> 를 만들고 v1.0.0 으로 배포합니다.</p>'})
+      : await api(f);
+    if (r) location.href = '?app=' + encodeURIComponent(r.id);
   } catch (err) { alert(err.message); }
 };
 </script>
