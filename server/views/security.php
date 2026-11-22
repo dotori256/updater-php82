@@ -180,7 +180,7 @@ foreach (list_apps() as $id => $a) {
   </table></div>
   <div class="row" style="margin-top:10px">
     <button type="button" onclick="upgradeLauncher()" <?= $lneed ? '' : 'disabled' ?>><?= $lneed ? '새 런처 배포 (' . $lneed . '개 솔루션)' : '모두 최신입니다' ?></button>
-    <span class="muted small-text">PC 가 실제로 바뀌었는지는 각 솔루션의 PC 현황에서 런처 버전(2.1.0)으로 확인하세요.</span>
+    <span class="muted small-text">PC 가 실제로 바뀌었는지는 각 솔루션의 PC 현황에서 런처 버전(2.2.0)으로 확인하세요.</span>
   </div>
   <?php endif; ?>
 </div>

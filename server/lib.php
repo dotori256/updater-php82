@@ -218,7 +218,7 @@ function save_app($s, $change = null) {
     if ($change !== null) {
         $hist = load_history($s['id']);
         $snap = [];
-        foreach ($s['files'] as $p => $f) $snap[$p] = ['size' => $f['size'], 'sha256' => $f['sha256']];
+        foreach ($s['files'] as $p => $f) $snap[$p] = ['size' => $f['size'], 'sha256' => $f['sha256']] + (empty($f['once']) ? [] : ['once' => true]);
         array_unshift($hist, [
             'version' => $s['version'],
             'label'   => $s['versionLabel'],
@@ -230,6 +230,7 @@ function save_app($s, $change = null) {
             'added'   => isset($change['added']) ? $change['added'] : [],
             'updated' => isset($change['updated']) ? $change['updated'] : [],
             'deleted' => isset($change['deleted']) ? $change['deleted'] : [],
+            'flags'   => isset($change['flags']) ? $change['flags'] : [],   // [경로 => true(보존)/false(해제)]
             'files'   => $snap,
         ]);
         write_json(app_history_file($s['id']), array_slice($hist, 0, HISTORY_KEEP));
@@ -240,7 +241,11 @@ function save_app($s, $change = null) {
 
 function write_manifest($s) {
     $files = [];
-    foreach ($s['files'] as $path => $f) $files[] = ['path' => $path, 'size' => $f['size'], 'hash' => $f['sha256'], 'sha256' => $f['sha256']];
+    foreach ($s['files'] as $path => $f) {
+        $e = ['path' => $path, 'size' => $f['size'], 'hash' => $f['sha256'], 'sha256' => $f['sha256']];
+        if (!empty($f['once'])) $e['once'] = true;   // PC 에 이미 있으면 덮어쓰지 않음 (런처 2.2.0+)
+        $files[] = $e;
+    }
     $m = [
         'solutionId'  => $s['id'],
         'name'        => $s['name'],
@@ -280,6 +285,14 @@ function gc_blobs() {
         $name = basename($blob);
         if (preg_match('/^[0-9a-f]{64}$/', $name) && !isset($used[$name]) && filemtime($blob) < $cutoff) @unlink($blob);
     }
+}
+
+// ---------- PC 설정 보존 (최초 1회만 설치) ----------
+// 표시된 파일은 PC 에 없을 때만 설치하고, 이미 있으면 내용이 달라도 덮어쓰지 않음 (PC 별로 고친 설정 파일 보호)
+// 런처 자신과 공개 키 파일은 항상 최신이어야 하므로 표시할 수 없음
+function once_allowed($path) {
+    $b = strtolower(basename($path));
+    return $b !== 'updater.exe' && $b !== SIGNKEY_PC_FILE;
 }
 
 function base_url() {

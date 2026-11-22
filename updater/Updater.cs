@@ -5,6 +5,7 @@
 //   1) 중복 실행 방지, 이전 업데이트가 중간에 끊겼으면 백업으로 복구
 //   2) 서버에 업데이트 확인 (PC 자동 등록) → Manifest 수신
 //   3) 로컬 파일과 비교 (경로/크기/SHA-256) → 바뀐 파일만 임시 폴더(.update\staging)에 다운로드 + 해시 검증
+//      (관리 사이트에서 "PC 설정 보존" 표시한 파일은 PC 에 없을 때만 받고, 있으면 그대로 둠)
 //   4) 기존 파일 백업(.update\backup) → 새 파일 적용 → 실패 시 자동 복구
 //   5) 결과를 서버에 보고 (실패 시 다음 실행 때 재전송) → 프로그램 실행
 //   서버 연결이 안 되면 솔루션 정책(오프라인 실행 허용)에 따라 기존 버전을 실행
@@ -21,6 +22,15 @@ using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
+using System.Reflection;
+
+// Windows 탐색기 › 속성 › 자세히 에 표시되는 버전 정보 (LauncherVersion 을 바꾸면 같이 바뀜)
+[assembly: AssemblyTitle("통합 런처 / 자동 업데이트")]
+[assembly: AssemblyDescription("통합 런처 / 자동 업데이트")]
+[assembly: AssemblyProduct("AutoUpdater")]
+[assembly: AssemblyVersion(AutoUpdater.Program.LauncherVersion + ".0")]
+[assembly: AssemblyFileVersion(AutoUpdater.Program.LauncherVersion + ".0")]
+[assembly: AssemblyInformationalVersion(AutoUpdater.Program.LauncherVersion)]
 
 namespace AutoUpdater
 {
@@ -145,6 +155,7 @@ namespace AutoUpdater
         public string Path;
         public long Size;
         public string Sha256;
+        public bool Once;   // PC 설정 보존: 없을 때만 설치, 이미 있으면 내용이 달라도 덮어쓰지 않음
     }
 
     class Manifest
@@ -328,7 +339,7 @@ namespace AutoUpdater
     // ======================================================================
     static class Program
     {
-        public const string LauncherVersion = "2.1.0";
+        public const string LauncherVersion = "2.2.0";
         static readonly char Sep = Path.DirectorySeparatorChar;
 
         static string BaseDir, SelfPath, WorkDir, StagingDir, BackupDir, JournalPath, StatePath, LogPath, ReportsPath;
@@ -569,6 +580,7 @@ namespace AutoUpdater
                 if (local == null) { Log("잘못된 경로 무시: " + f.Path); continue; }
                 bool need;
                 if (!File.Exists(local)) need = true;
+                else if (f.Once) need = false;   // PC 에서 고친 설정 파일은 그대로 둠 (--repair 때도)
                 else
                 {
                     FileInfo fi = new FileInfo(local);
@@ -1107,6 +1119,7 @@ namespace AutoUpdater
                     f.Path = Str(d, "path");
                     f.Sha256 = Str(d, "sha256").Length > 0 ? Str(d, "sha256") : Str(d, "hash");
                     f.Size = Convert.ToInt64(d.ContainsKey("size") ? d["size"] : 0);
+                    f.Once = Bool(d, "once", false);
                     if (f.Path.Length > 0 && f.Sha256.Length == 64) m.Files.Add(f);
                 }
             object del;

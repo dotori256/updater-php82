@@ -119,7 +119,7 @@ try {
             $maxLabel = max_label($s);
             if ($label === '') $label = suggest_label($s);
             elseif ($maxLabel !== '' && semver_cmp($label, $maxLabel) <= 0) fail('새 버전(' . $label . ')은 지금까지 배포한 가장 높은 버전(' . $maxLabel . ')보다 높아야 합니다.');
-            $added = []; $updated = []; $deleted = []; $same = [];
+            $added = []; $updated = []; $deleted = []; $same = []; $flags = [];
             foreach ($items as $it) {
                 $path = clean_path(isset($it['path']) ? $it['path'] : '');
                 $sha = isset($it['sha256']) ? strtolower($it['sha256']) : '';
@@ -130,9 +130,18 @@ try {
                 // 대소문자만 다른 기존 경로가 있으면 그 경로를 교체 (Windows 는 대소문자 구분 안 함)
                 foreach (array_keys($s['files']) as $k) if ($k !== $path && strcasecmp($k, $path) === 0) { $path = $k; break; }
                 $old = isset($s['files'][$path]) ? $s['files'][$path] : null;
-                if ($old && $old['sha256'] === $sha) { $same[] = $path; continue; }
-                $s['files'][$path] = ['size' => $size, 'sha256' => $sha, 'uploaded' => now_str()];
+                // PC 설정 보존(최초 1회만 설치): 항목에 값이 없으면 기존 표시 유지
+                $once = isset($it['once']) ? !empty($it['once']) : ($old && !empty($old['once']));
+                if ($once && !once_allowed($path)) fail($path . ' 은(는) 런처 파일이라 "PC 설정 보존" 을 켤 수 없습니다.');
+                $oldOnce = $old && !empty($old['once']);
+                if ($old && $old['sha256'] === $sha) {
+                    if ($once !== $oldOnce) { $old['once'] = $once; if (!$once) unset($old['once']); $s['files'][$path] = $old; $flags[$path] = $once; }
+                    else $same[] = $path;
+                    continue;
+                }
+                $s['files'][$path] = ['size' => $size, 'sha256' => $sha, 'uploaded' => now_str()] + ($once ? ['once' => true] : []);
                 if ($old) $updated[] = $path; else $added[] = $path;
+                if ($once !== $oldOnce) $flags[$path] = $once;
                 $s['delete'] = array_values(array_filter($s['delete'], function ($d) use ($path) { return strcasecmp($d, $path) !== 0; }));
             }
             foreach ($deletes as $p) {
@@ -145,14 +154,38 @@ try {
             if ($s['launch'] === '') {
                 foreach ($added as $p) if (preg_match('/\.exe$/i', $p) && !preg_match('/updater\.exe$/i', $p) && strpos($p, '/') === false) { $s['launch'] = $p; break; }
             }
-            if (!$added && !$updated && !$deleted) return ['changed' => false, 'same' => count($same)];
-            $s = save_app($s, ['type' => 'deploy', 'memo' => $memo, 'label' => $label, 'added' => $added, 'updated' => $updated, 'deleted' => $deleted]);
+            if (!$added && !$updated && !$deleted && !$flags) return ['changed' => false, 'same' => count($same)];
+            $s = save_app($s, ['type' => 'deploy', 'memo' => $memo, 'label' => $label, 'added' => $added, 'updated' => $updated, 'deleted' => $deleted, 'flags' => $flags]);
             $hashes = [];
             foreach (array_merge($added, $updated) as $p) $hashes[$p] = $s['files'][$p]['sha256'];
-            audit_log('deploy', ['app' => $s['id'], 'label' => $s['versionLabel'], 'build' => $s['version'], 'memo' => $memo, 'files' => $hashes, 'deleted' => $deleted, 'signed' => !empty($s['signature'])]);
-            return ['changed' => true, 'version' => $s['version'], 'label' => $s['versionLabel'], 'added' => count($added), 'updated' => count($updated), 'deleted' => count($deleted), 'same' => count($same)];
+            audit_log('deploy', ['app' => $s['id'], 'label' => $s['versionLabel'], 'build' => $s['version'], 'memo' => $memo, 'files' => $hashes, 'deleted' => $deleted, 'once' => $flags, 'signed' => !empty($s['signature'])]);
+            return ['changed' => true, 'version' => $s['version'], 'label' => $s['versionLabel'], 'added' => count($added), 'updated' => count($updated), 'deleted' => count($deleted), 'same' => count($same), 'flags' => count($flags)];
         });
         json_out(['ok' => true] + $result);
+
+    // ----- PC 설정 보존(최초 1회만 설치) 켜기/끄기: 파일은 그대로, 표시만 바꿔 새 빌드로 기록 -----
+    case 'set_once':
+        $paths = post_json('paths');
+        $on = post('once') === '1';
+        if (!$paths) fail('파일을 선택하세요.');
+        require_publish_auth('set_once ' . post('app'));
+        $r = with_lock(function () use ($paths, $on) {
+            $s = need_app();
+            $flags = [];
+            foreach ($paths as $p) {
+                $p = clean_path($p);
+                if ($p === null || !isset($s['files'][$p])) continue;
+                if ($on && !once_allowed($p)) fail($p . ' 은(는) 런처 파일이라 "PC 설정 보존" 을 켤 수 없습니다.');
+                if (!empty($s['files'][$p]['once']) === $on) continue;
+                if ($on) $s['files'][$p]['once'] = true; else unset($s['files'][$p]['once']);
+                $flags[$p] = $on;
+            }
+            if (!$flags) return ['changed' => false];
+            $s = save_app($s, ['type' => 'settings', 'memo' => ($on ? 'PC 설정 보존: ' : 'PC 설정 보존 해제: ') . implode(', ', array_keys($flags)), 'flags' => $flags]);
+            audit_log('set_once', ['app' => $s['id'], 'build' => $s['version'], 'files' => $flags, 'signed' => !empty($s['signature'])]);
+            return ['changed' => true, 'version' => $s['version'], 'count' => count($flags)];
+        });
+        json_out(['ok' => true] + $r);
 
     // ----- PC 삭제 예정 목록에서 빼기 -----
     case 'undelete':
@@ -247,6 +280,8 @@ try {
             foreach ($snap as $p => $f) {
                 $keep = isset($s['files'][$p]) && $s['files'][$p]['sha256'] === $f['sha256'];
                 $newFiles[$p] = $f + ['uploaded' => $keep ? $s['files'][$p]['uploaded'] : $now];
+                // PC 설정 보존 표시는 롤백해도 유지 (옛 버전으로 돌렸다가 PC 설정이 덮어써지지 않도록)
+                if (!empty($s['files'][$p]['once']) && once_allowed($p)) $newFiles[$p]['once'] = true;
                 $s['delete'] = array_values(array_filter($s['delete'], function ($d) use ($p) { return strcasecmp($d, $p) !== 0; }));
             }
             $s['files'] = $newFiles;
