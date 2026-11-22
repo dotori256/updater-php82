@@ -46,7 +46,11 @@ function sign_ini_value() { $k = sign_key(); return $k ? $k['n'] . '.' . $k['e']
 // PC 가 실제로 따르는 내용만 서명 (공지·활성 같은 표시용 설정은 서명 없이 바꿀 수 있게 제외)
 function signed_payload($s) {
     $files = [];
-    foreach ($s['files'] as $p => $f) $files[] = ['path' => (string)$p, 'size' => intval($f['size']), 'sha256' => $f['sha256']];
+    foreach ($s['files'] as $p => $f) {
+        $e = ['path' => (string)$p, 'size' => intval($f['size']), 'sha256' => $f['sha256']];
+        if (!empty($f['once'])) $e['once'] = true;   // 표시 없는 파일은 예전과 같은 원문 → 기존 서명 그대로 유효
+        $files[] = $e;
+    }
     return json_encode([
         'app'        => $s['id'],
         'build'      => intval($s['version']),

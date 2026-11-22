@@ -44,7 +44,7 @@ $maxLabel = max_label($s);
   <div id="pendingBox" class="hidden" style="margin-top:12px">
     <div class="tablewrap" style="max-height:320px;overflow:auto;margin-bottom:12px">
       <table>
-        <thead><tr><th>배포할 경로</th><th>크기</th><th>구분</th><th></th></tr></thead>
+        <thead><tr><th>배포할 경로</th><th>크기</th><th>구분</th><th class="nowrap" title="켜면 PC에 이 파일이 없을 때만 설치하고, 이미 있으면 덮어쓰지 않습니다 (PC에서 고친 설정 유지)">PC 설정 보존 ⓘ</th><th></th></tr></thead>
         <tbody id="pendingRows"></tbody>
       </table>
     </div>
@@ -60,6 +60,7 @@ $maxLabel = max_label($s);
       <label>업데이트 내용</label>
       <textarea id="deployMemo" placeholder="런처 화면에 표시됩니다. 예) 로그인 오류 수정, 통계 화면 속도 개선"></textarea>
     </div>
+    <p class="muted small-text" style="margin-top:8px">PC 설정 보존: 체크한 파일은 <b>처음 설치할 때만</b> 내려가고, 그 뒤에는 PC에서 내용을 고쳐도 다시 덮어쓰지 않습니다. 새로 올리는 .ini / .cfg / .conf / .config 파일은 자동으로 체크됩니다.</p>
     <div class="row" style="margin-top:10px;justify-content:flex-end">
       <button type="button" class="secondary" onclick="clearPending()">비우기</button>
       <button type="button" id="deployBtn" onclick="deploy()">배포</button>
@@ -74,6 +75,8 @@ $maxLabel = max_label($s);
   <h2>배포 중인 파일 <span class="muted small-text">v<?= h($s['versionLabel'] ?: '-') ?></span></h2>
   <div class="row" style="margin-bottom:10px">
     <input type="text" id="filter" placeholder="파일 이름 검색" oninput="filterRows()" class="grow">
+    <button type="button" class="secondary" id="onceOnBtn" onclick="setOnce(true)" disabled title="선택한 파일을 PC에 없을 때만 설치하고, 이미 있으면 덮어쓰지 않습니다">PC 설정 보존</button>
+    <button type="button" class="secondary" id="onceOffBtn" onclick="setOnce(false)" disabled title="선택한 파일을 다시 서버 내용으로 항상 맞춥니다">보존 해제</button>
     <button type="button" class="danger" id="delBtn" onclick="deleteSelected()" disabled>선택 삭제</button>
     <label class="small-text"><input type="checkbox" id="removeOnPc" checked> PC에서도 삭제</label>
   </div>
@@ -84,7 +87,7 @@ $maxLabel = max_label($s);
     <?php foreach ($s['files'] as $path => $f): ?>
       <tr data-path="<?= h($path) ?>">
         <td><input type="checkbox" class="sel" value="<?= h($path) ?>" onchange="updateDelBtn()"></td>
-        <td class="mono"><?= h($path) ?><?php if ($path === $s['launch']): ?><span class="tag">실행 파일</span><?php endif; ?></td>
+        <td class="mono"><?= h($path) ?><?php if ($path === $s['launch']): ?><span class="tag">실행 파일</span><?php endif; ?><?php if (!empty($f['once'])): ?><span class="tag success" title="PC에 없을 때만 설치, 이미 있으면 덮어쓰지 않음">PC 설정 보존</span><?php endif; ?></td>
         <td class="nowrap"><?= fmt_size($f['size']) ?></td>
         <td class="mono muted hide-sm" title="<?= h($f['sha256']) ?>"><?= h(substr($f['sha256'], 0, 10)) ?>…</td>
         <td class="muted small-text nowrap"><?= h(isset($f['uploaded']) ? $f['uploaded'] : '') ?></td>
@@ -115,7 +118,8 @@ $maxLabel = max_label($s);
     <thead><tr><th>버전</th><th>빌드</th><th>시각</th><th>구분</th><th>업데이트 내용</th><th></th></tr></thead>
     <tbody>
     <?php foreach ($history as $i => $hst):
-        $n = count($hst['added']) + count($hst['updated']) + count($hst['deleted']); ?>
+        $hFlags = !empty($hst['flags']) ? $hst['flags'] : [];
+        $n = count($hst['added']) + count($hst['updated']) + count($hst['deleted']) + count($hFlags); ?>
       <tr>
         <td class="nowrap"><b><?= h(!empty($hst['label']) ? 'v' . $hst['label'] : '-') ?></b><?php if ($i === 0): ?><span class="tag success">운영 중</span><?php endif; ?></td>
         <td class="muted"><?= h($hst['version']) ?></td>
@@ -125,12 +129,13 @@ $maxLabel = max_label($s);
           <?= $hst['memo'] !== '' ? nl2br(h($hst['memo'])) : '<span class="muted">-</span>' ?>
           <?php if ($n): ?>
           <details><summary class="muted small-text">
-            <?= $hst['added'] ? '추가 ' . count($hst['added']) . ' ' : '' ?><?= $hst['updated'] ? '교체 ' . count($hst['updated']) . ' ' : '' ?><?= $hst['deleted'] ? '삭제 ' . count($hst['deleted']) : '' ?>
+            <?= $hst['added'] ? '추가 ' . count($hst['added']) . ' ' : '' ?><?= $hst['updated'] ? '교체 ' . count($hst['updated']) . ' ' : '' ?><?= $hst['deleted'] ? '삭제 ' . count($hst['deleted']) . ' ' : '' ?><?= $hFlags ? '보존 설정 ' . count($hFlags) : '' ?>
           </summary>
             <ul class="hist-files mono">
               <?php foreach ($hst['added'] as $p): ?><li><span class="tag new">추가</span> <?= h($p) ?></li><?php endforeach; ?>
               <?php foreach ($hst['updated'] as $p): ?><li><span class="tag upd">교체</span> <?= h($p) ?></li><?php endforeach; ?>
               <?php foreach ($hst['deleted'] as $p): ?><li><span class="tag del">삭제</span> <?= h($p) ?></li><?php endforeach; ?>
+              <?php foreach ($hFlags as $p => $on): ?><li><span class="tag<?= $on ? ' success' : '' ?>"><?= $on ? '보존' : '보존 해제' ?></span> <?= h($p) ?></li><?php endforeach; ?>
             </ul>
           </details>
           <?php endif; ?>
@@ -149,6 +154,11 @@ $maxLabel = max_label($s);
 const APP = <?= json_encode($s['id']) ?>;
 const CUR_LABEL = <?= json_encode($maxLabel) ?>;
 const EXISTING = new Map(<?= json_encode(array_map(function ($p) { return [strtolower($p), $p]; }, array_keys($s['files'])), JSON_UNESCAPED_UNICODE) ?>);
+// PC 설정 보존(최초 1회만 설치) 중인 기존 파일 (소문자 경로)
+const ONCE = new Set(<?= json_encode(array_values(array_map('strtolower', array_keys(array_filter($s['files'], function ($f) { return !empty($f['once']); })))), JSON_UNESCAPED_UNICODE) ?>);
+const CONFIG_RE = /\.(ini|cfg|conf|config)$/i;
+const NO_ONCE_RE = /(^|\/)(updater\.exe|updater\.signkey)$/i;   // 런처 파일은 항상 최신 유지
+function defaultOnce(key) { return EXISTING.has(key) ? ONCE.has(key) : (CONFIG_RE.test(key) && !NO_ONCE_RE.test(key)); }
 
 function bump(i) {
   const p = (CUR_LABEL || '0.0.0').split('.').map(Number);
@@ -157,7 +167,7 @@ function bump(i) {
 }
 
 // ---------- 배포 대기 목록 ----------
-const pending = new Map(); // 소문자 경로 -> {path, file}
+const pending = new Map(); // 소문자 경로 -> {path, file, once}
 function joinPath(prefix, p) {
   prefix = prefix.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
   return prefix ? prefix + '/' + p : p;
@@ -167,7 +177,8 @@ function addPending(items) {
     let path = it.path.replace(/\\/g, '/');
     const key = path.toLowerCase();
     if (EXISTING.has(key)) path = EXISTING.get(key);
-    pending.set(key, {path, file: it.file});
+    const prev = pending.get(key);
+    pending.set(key, {path, file: it.file, once: prev ? prev.once : defaultOnce(key)});
   }
   renderPending();
 }
@@ -179,9 +190,13 @@ function renderPending() {
     const tr = document.createElement('tr');
     tr.innerHTML = '<td class="mono"></td><td class="nowrap"></td><td>' +
       (EXISTING.has(key) ? '<span class="tag upd">교체</span>' : '<span class="tag new">새 파일</span>') +
-      '</td><td><button type="button" class="secondary small">빼기</button></td>';
+      '</td><td style="text-align:center"><input type="checkbox" class="once"></td><td><button type="button" class="secondary small">빼기</button></td>';
     tr.children[0].textContent = it.path;
     tr.children[1].textContent = fmtSize(it.file.size);
+    const cb = tr.querySelector('.once');
+    cb.checked = it.once;
+    cb.disabled = NO_ONCE_RE.test(key);
+    cb.onchange = () => { it.once = cb.checked; };
     tr.querySelector('button').onclick = () => { pending.delete(key); renderPending(); };
     tb.appendChild(tr);
   }
@@ -246,7 +261,7 @@ async function deploy() {
       msg.textContent = '올리는 중 (' + (i + 1) + '/' + list.length + ') ' + it.path;
       const r = await api({action:'upload'}, it.file, p => fill.style.width = ((done + p * it.file.size) / total * 100) + '%');
       if (r.size !== it.file.size) throw new Error(it.path + ' 크기가 맞지 않습니다. 다시 시도하세요.');
-      items.push({path: it.path, sha256: r.sha256, size: r.size});
+      items.push({path: it.path, sha256: r.sha256, size: r.size, once: it.once ? 1 : 0});
       done += it.file.size;
     }
     fill.style.width = '100%';
@@ -258,7 +273,7 @@ async function deploy() {
     if (r === null) { msg.className = 'small-text warn'; msg.textContent = '취소했습니다. 아직 배포되지 않았습니다.'; btn.disabled = false; bar.classList.add('hidden'); return; }
     if (!r.changed) { msg.className = 'small-text warn'; msg.textContent = '올린 파일이 모두 기존과 같아서 바뀐 것이 없습니다.'; btn.disabled = false; return; }
     msg.className = 'small-text ok';
-    msg.textContent = 'v' + r.label + ' 배포 완료: 새 파일 ' + r.added + ', 교체 ' + r.updated + (r.same ? ', 변경 없음 ' + r.same : '');
+    msg.textContent = 'v' + r.label + ' 배포 완료: 새 파일 ' + r.added + ', 교체 ' + r.updated + (r.flags ? ', 보존 설정 변경 ' + r.flags : '') + (r.same ? ', 변경 없음 ' + r.same : '');
     setTimeout(() => location.reload(), 1200);
   } catch (e) {
     msg.className = 'small-text err'; msg.textContent = '실패: ' + e.message + ' (아직 배포되지 않았습니다)';
@@ -269,24 +284,47 @@ async function deploy() {
 // 배포 확인 창 내용: 파일별 크기/구분/SHA-256 + 실행 파일 경고
 const RISKY = /\.(exe|dll|sys|ocx|com|scr|msi|bat|cmd|ps1|vbs|js|jse|wsf|hta|lnk|bpl)$/i;
 function deploySummary(items, label, memo) {
-  let risky = 0, rows = '';
+  let risky = 0, rows = '', onceReplaced = [], onceCount = 0;
   for (const it of items) {
     const isRisky = RISKY.test(it.path);
     if (isRisky) risky++;
-    const kind = EXISTING.has(it.path.toLowerCase()) ? '<span class="tag upd">교체</span>' : '<span class="tag new">새 파일</span>';
-    rows += '<tr><td class="mono">' + esc(it.path) + (isRisky ? ' <span class="tag del">실행</span>' : '') + '</td><td class="nowrap">' + fmtSize(it.size) + '</td><td>' + kind + '</td>' +
+    const exists = EXISTING.has(it.path.toLowerCase());
+    if (it.once) { onceCount++; if (exists) onceReplaced.push(it.path); }
+    const kind = exists ? '<span class="tag upd">교체</span>' : '<span class="tag new">새 파일</span>';
+    rows += '<tr><td class="mono">' + esc(it.path) + (isRisky ? ' <span class="tag del">실행</span>' : '') + (it.once ? ' <span class="tag success">PC 설정 보존</span>' : '') + '</td><td class="nowrap">' + fmtSize(it.size) + '</td><td>' + kind + '</td>' +
       '<td class="mono">' + esc(it.sha256) + (isRisky ? '<br><a href="https://www.virustotal.com/gui/file/' + esc(it.sha256) + '" target="_blank" rel="noopener noreferrer">VirusTotal 에서 검사 결과 보기</a>' : '') + '</td></tr>';
   }
   return '<p>솔루션 <b>' + esc(APP) + '</b> 에 <b>v' + esc(label) + '</b> 를 배포합니다. 다음 실행 때 <b>모든 PC</b>에 설치됩니다.</p>' +
     (memo.trim() ? '<p class="muted small-text">업데이트 내용: ' + esc(memo) + '</p>' : '') +
     (risky ? '<div class="warnbox">⚠ 실행 가능한 파일 ' + risky + '개가 포함되어 있습니다. 직접 빌드한 파일이 맞는지, 해시가 빌드 PC의 값과 같은지 확인하세요.<br>' +
       '<span class="small-text">빌드 PC에서 확인: <code>certutil -hashfile 파일이름 SHA256</code></span></div>' : '') +
+    (onceCount ? '<p class="small-text">「PC 설정 보존」 파일 ' + onceCount + '개는 PC에 없을 때만 설치되고, 이미 있는 PC에서는 덮어쓰지 않습니다.' +
+      (onceReplaced.length ? ' <b>그래서 이번에 바꾼 내용(' + onceReplaced.map(esc).join(', ') + ')은 이미 설치된 PC에는 반영되지 않습니다.</b> 모든 PC에 강제로 덮어쓰려면 보존 체크를 끄고 배포하세요.' : '') +
+      '<br><span class="muted">런처 2.2.0 미만 PC는 이 표시를 몰라서 계속 덮어씁니다. 보안 › 기존 PC 런처 교체로 먼저 런처를 올려주세요.</span></p>' : '') +
     '<div class="tablewrap"><table><thead><tr><th>경로</th><th>크기</th><th>구분</th><th>SHA-256</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
 }
 
 // ---------- 목록 ----------
 function selected() { return [...document.querySelectorAll('.sel:checked')].map(c => c.value); }
-function updateDelBtn() { const n = selected().length, b = document.getElementById('delBtn'); b.disabled = !n; b.textContent = n ? '선택 삭제 (' + n + ')' : '선택 삭제'; }
+function updateDelBtn() {
+  const n = selected().length, b = document.getElementById('delBtn'); b.disabled = !n; b.textContent = n ? '선택 삭제 (' + n + ')' : '선택 삭제';
+  onceOnBtn.disabled = onceOffBtn.disabled = !n;
+}
+async function setOnce(on) {
+  const paths = selected().filter(p => !on || !NO_ONCE_RE.test(p));
+  if (!paths.length) { alert('런처 파일(Updater.exe, updater.signkey)은 보존으로 설정할 수 없습니다.'); return; }
+  try {
+    const r = await secureApi({action:'set_once', app:APP, paths:JSON.stringify(paths), once: on ? '1' : '0'},
+      {title: on ? 'PC 설정 보존 켜기' : 'PC 설정 보존 해제', okText: on ? '보존 켜기' : '보존 해제', publish: true,
+       html: (on ? '<p>아래 파일은 앞으로 <b>PC에 없을 때만</b> 설치되고, 이미 있으면 PC에서 고친 내용을 덮어쓰지 않습니다.</p>'
+                 : '<p>아래 파일은 다시 <b>서버 내용으로 항상 맞춥니다</b>. 다음 실행 때 PC에서 고친 내용이 서버 파일로 덮어써집니다.</p>') +
+         '<ul class="mono">' + paths.map(p => '<li>' + esc(p) + '</li>').join('') + '</ul>' +
+         '<p class="muted small-text">파일 내용은 바뀌지 않고 표시만 새 빌드로 기록합니다. 런처 2.2.0 이상에서 적용됩니다.</p>'});
+    if (r === null) return;
+    if (!r.changed) alert('이미 그렇게 설정되어 있습니다.');
+    location.reload();
+  } catch (e) { alert(e.message); }
+}
 function toggleAll(cb) { document.querySelectorAll('#rows tr:not([hidden]) .sel').forEach(c => c.checked = cb.checked); updateDelBtn(); }
 function filterRows() {
   const q = document.getElementById('filter').value.toLowerCase();
