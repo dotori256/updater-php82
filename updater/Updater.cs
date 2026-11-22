@@ -22,6 +22,15 @@ using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
+using System.Reflection;
+
+// Windows 탐색기 › 속성 › 자세히 에 표시되는 버전 정보 (LauncherVersion 을 바꾸면 같이 바뀜)
+[assembly: AssemblyTitle("통합 런처 / 자동 업데이트")]
+[assembly: AssemblyDescription("통합 런처 / 자동 업데이트")]
+[assembly: AssemblyProduct("AutoUpdater")]
+[assembly: AssemblyVersion(AutoUpdater.Program.LauncherVersion + ".0")]
+[assembly: AssemblyFileVersion(AutoUpdater.Program.LauncherVersion + ".0")]
+[assembly: AssemblyInformationalVersion(AutoUpdater.Program.LauncherVersion)]
 
 namespace AutoUpdater
 {
