@@ -16,3 +16,8 @@ server/manifests/*
 *.dcu
 *.~*
 __history/
+
+# MSI 빌드 산출물 / 내려받은 WiX
+installer/out/
+installer/obj/
+installer/tools/
